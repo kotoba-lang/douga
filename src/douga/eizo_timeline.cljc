@@ -23,12 +23,14 @@
       (defaults to \"1280x720\", same default douga.ffmpeg/build-render-plan
       already used).
 
-  v0 scope, updated (ADR-2607121400 Wave 5 -- dissolve): `:dissolve`
-  video-track transitions now have a real render path — a genuine `xfade`
-  crossfade, see `douga.ffmpeg/xfade-transition-cmd` and this repo's README.
-  Other transition types (`:wipe`/etc.) are still unimplemented and a video
-  track carrying one is rejected with ex-info rather than silently ignored
-  or silently downgraded to a hard cut; wiring those is a further follow-up."
+  v0 scope, updated (ADR-2607121400 Wave 5 -- dissolve, Wave 6 -- wipe):
+  `:dissolve` and `:wipe` video-track transitions now have a real render
+  path — a genuine `xfade` crossfade / spatial wipe, see
+  `douga.ffmpeg/xfade-transition-cmd` and this repo's README. Other
+  transition types (`:slide`/`:wipe-tl`/etc. -- anything not in
+  supported-transition-types) are still unimplemented and a video track
+  carrying one is rejected with ex-info rather than silently ignored or
+  silently downgraded to a hard cut; wiring those is a further follow-up."
   (:require [clojure.string :as str]
             [kami.eizo.timeline :as tl]
             [kami.eizo.timeline.timecode :as tc]
@@ -41,20 +43,21 @@
   (first (filter #(= "bgm" (:marker/name %)) (:timeline/markers timeline))))
 
 (def ^:private supported-transition-types
-  "Transition types douga.ffmpeg has a real render path for. Today: only
-  :dissolve (a real xfade filter_complex, see
-  douga.ffmpeg/xfade-transition-cmd). :wipe / other kami.eizo.timeline
-  transition types have no ffmpeg builder yet and are still rejected below,
-  same as v0's blanket rejection was."
-  #{:dissolve})
+  "Transition types douga.ffmpeg has a real render path for: :dissolve (a
+  real xfade `fade` filter_complex) and :wipe (a real xfade `wipeleft`
+  filter_complex), see douga.ffmpeg/xfade-transition-cmd. Other
+  kami.eizo.timeline transition types have no ffmpeg builder yet and are
+  still rejected below, same as v0's blanket rejection was."
+  #{:dissolve :wipe})
 
 (defn- video-segments
   "scene-index -> frame-blob-key / duration-frames, from the :video track's
-  clips, plus any :dissolve transitions on the track translated from
-  :clip/id refs to scene-index pairs (`:dissolves`, consumed by render-plan
-  to populate :video-transitions). Non-:dissolve transition types (:wipe
-  etc.) have no ffmpeg render path yet and are rejected with ex-info —
-  strip them before calling this fn, same as v0."
+  clips, plus any supported transitions on the track translated from
+  :clip/id refs to scene-index pairs (`:transitions`, consumed by
+  render-plan to populate :video-transitions). Unsupported transition
+  types (anything not in supported-transition-types) have no ffmpeg render
+  path yet and are rejected with ex-info — strip them before calling this
+  fn, same as v0."
   [video-track]
   (when video-track
     (let [unsupported (remove #(contains? supported-transition-types (:transition/type %))
@@ -62,7 +65,8 @@
       (when (seq unsupported)
         (throw (ex-info (str "douga.eizo-timeline: video-track transition type(s) "
                               (pr-str (vec (distinct (map :transition/type unsupported))))
-                              " have no ffmpeg render path yet (only :dissolve does); "
+                              " have no ffmpeg render path yet (supported: "
+                              (pr-str supported-transition-types) "); "
                               "strip them before calling this fn")
                          {:track video-track :unsupported-transitions unsupported}))))
     (let [clips (:track/clips video-track)
@@ -71,11 +75,12 @@
        (into {} (map (fn [c] [(:douga/scene-index c) (:clip/source-id c)])) clips)
        :duration-by-scene
        (into {} (map (fn [c] [(:douga/scene-index c) (:clip/duration c)])) clips)
-       :dissolves
+       :transitions
        (mapv (fn [tr]
                {:from-scene-index (clip-id->scene-index (:transition/from-clip tr))
                 :to-scene-index (clip-id->scene-index (:transition/to-clip tr))
-                :duration-frames (:transition/duration tr)})
+                :duration-frames (:transition/duration tr)
+                :transition-type (:transition/type tr)})
              (:track/transitions video-track))})))
 
 (defn- voice-lines-by-scene
@@ -100,16 +105,18 @@
   scene-segment-cmd / concat-segments-cmd / bgm-mix-cmd / concat-list-text
   command builders keep working unchanged downstream. Each segment now also
   carries :duration-frames (the clip's own full duration, from
-  :clip/duration — needed to compute a dissolve's ffmpeg xfade offset/duration
-  in seconds). If the :video track has any :dissolve transitions, the plan
-  additionally carries :video-transitions — a vector of
-  `{:from-scene-index :to-scene-index :duration-frames}` maps, one per
-  transition, for a caller to feed to `douga.ffmpeg/xfade-transition-cmd`
-  alongside the two bridged segments' :frame-blob-key/:duration-frames."
+  :clip/duration — needed to compute a transition's ffmpeg xfade offset/duration
+  in seconds). If the :video track has any supported transitions
+  (:dissolve / :wipe), the plan additionally carries :video-transitions — a
+  vector of `{:from-scene-index :to-scene-index :duration-frames
+  :transition-type}` maps, one per transition, for a caller to feed to
+  `douga.ffmpeg/xfade-transition-cmd` alongside the two bridged segments'
+  :frame-blob-key/:duration-frames (`:transition-type` selects the xfade
+  mode, see `douga.ffmpeg/xfade-mode-by-transition-type`)."
   [timeline]
   (let [video-track (track-of-type timeline :video)
         audio-track (track-of-type timeline :audio)
-        {:keys [frame-by-scene duration-by-scene dissolves]} (video-segments video-track)
+        {:keys [frame-by-scene duration-by-scene transitions]} (video-segments video-track)
         voices (voice-lines-by-scene audio-track)
         order (sort (into (set (keys frame-by-scene)) (keys voices)))
         segments
@@ -133,7 +140,7 @@
              :width w
              :height h
              :fps fps}
-      (seq dissolves) (assoc :video-transitions dissolves))))
+      (seq transitions) (assoc :video-transitions transitions))))
 
 ;; ---------------------------------------------------------------------------
 ;; Builders — convenience constructors that mirror kami.eizo.timeline's own

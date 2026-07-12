@@ -89,4 +89,22 @@
                                               {:width 320 :height 240 :fps 24
                                                :from-duration-frames 24
                                                :to-duration-frames 96
-                                               :transition-duration-frames 48})))))
+                                               :transition-duration-frames 48}))))
+  (testing ":transition-type :wipe selects xfade's wipeleft mode instead of fade"
+    (let [cmd (ffmpeg/xfade-transition-cmd "a.png" "b.png" "out.mp4"
+                                           {:width 320 :height 240 :fps 24
+                                            :from-duration-frames 96
+                                            :to-duration-frames 96
+                                            :transition-duration-frames 48
+                                            :transition-type :wipe})
+          filter-str (str (second (drop-while #(not= "-filter_complex" %) cmd)))]
+      (is (str/includes? filter-str "xfade=transition=wipeleft"))
+      (is (not (str/includes? filter-str "transition=fade")))))
+  (testing "throws for an unknown :transition-type instead of silently falling back to fade"
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (ffmpeg/xfade-transition-cmd "a.png" "b.png" "out.mp4"
+                                              {:width 320 :height 240 :fps 24
+                                               :from-duration-frames 96
+                                               :to-duration-frames 96
+                                               :transition-duration-frames 48
+                                               :transition-type :slide})))))
