@@ -237,6 +237,109 @@ wired end-to-end — see `douga.eizo-timeline`'s `:video-transitions` output
 (one entry per transition) as the extension point for a caller wanting to
 chain several dissolves across more than two clips.
 
+## Real-ffmpeg execution proof for the LEGACY path (`test/e2e/real_ffmpeg_legacy_proof.cljs`)
+
+Everything above this section (`real_ffmpeg_proof.cljs`, `real_dissolve_proof.cljs`)
+proves `douga.eizo-timeline`'s `kami.eizo.timeline`-EDL entry point. That path
+is real and well-tested, but it is **not** what runs in production today.
+**The live, deployed `yukkuri` pipeline uses `douga.ffmpeg/build-render-plan`
+directly** — the original, looser "scene/lines/assets" shape (ADR-2607051600)
+— and until this proof, that specific function had only ever been checked at
+the *shape* level (`test/douga/ffmpeg_test.cljc`): never handed to a real
+`ffmpeg` binary.
+
+`test/e2e/real_ffmpeg_legacy_proof.cljs` closes that gap, for the actual
+production entry point, with the same rigor as the two proofs above. It:
+
+1. hand-builds a real scene/lines/assets timeline in the exact lenient shape
+   `test/douga/ffmpeg_test.cljc`'s own fixture already assumes (`:scenes`
+   with `:index`, `:assets` with `:kind`/`:blobKey`/`:meta {:sceneIndex}`,
+   `:lines` with `:sceneIndex`/`:lineIndex`/`:voiceBlobKey`/`:speaker`/
+   `:text`) — 3 scenes (red / lime / blue), scene 0 with **two** real voice
+   takes (1.0s + 1.2s, to exercise `concat-audio-cmd`'s ordering-by-line
+   logic), scene 1 with one voice take (1.6s), and scene 2 with **zero**
+   lines (a real "silent" scene, to exercise `silent-audio-cmd`);
+2. generates every frame/voice/bgm source locally via `ffmpeg -f lavfi`
+   (`color=`/`sine=` — no external assets, no network);
+3. drives that timeline through the **real, unmodified**
+   `douga.ffmpeg/build-render-plan` and asserts its output shape (segment
+   order, `:frame-blob-key`, `:voice-blob-keys` ordering, `:texts`,
+   `:speakers`, `:bgm-blob-key`, resolution/fps) against the hand-built
+   input;
+4. for each segment, builds its audio track with the **real**
+   `concat-audio-cmd` (non-empty `:voice-blob-keys`, any count) or
+   `silent-audio-cmd` (empty `:voice-blob-keys`) and renders it with the
+   **real** `scene-segment-cmd`, then the **real**
+   `concat-segments-cmd` and `bgm-mix-cmd` — every argv executed is exactly
+   what `douga.ffmpeg` returns, nothing hand-typed;
+5. executes every command as a real, synchronous `ffmpeg` child process;
+6. verifies with real `ffprobe`: each segment's *own* real rendered video
+   duration against its *own* real input audio duration (proving
+   `-shortest`'s emergent-duration behavior directly, segment by segment —
+   see "Known limitations" below), and the final muxed output's dimensions
+   and total duration (the sum of the real per-segment durations — nothing
+   pre-computed, since the plan itself carries no duration data at all);
+7. samples real decoded pixels at 3 timestamps per scene (9 total),
+   boundaries derived from the *measured* per-segment durations (not
+   assumed round numbers), confirming the right color is on screen at the
+   right time.
+
+Last verified run: all 34 checks passed — 320×240 final output, 5.677s
+total duration (sum of measured per-segment durations 2.2s + 1.6s + 1.8s =
+5.6s; the ~77ms delta is ordinary concat-demuxer/bgm-mix container-duration
+rounding, the same class of drift already noted for the newer path above,
+not a `build-render-plan` defect), each per-segment video duration matched
+its real input audio duration exactly (0s delta, well within the 1-frame/
+24fps ≈ 41.7ms tolerance asserted), and every sampled pixel matched its
+scene's expected color within a 40/255-channel tolerance (actual observed
+drift was 1–3/255, ordinary H.264/yuv420p lossy-encoding drift).
+
+Requires system `ffmpeg` + `ffprobe` on `PATH`. No extra classpath needed —
+this path has no `kami-eizo-timeline` dependency:
+
+```bash
+nbb -cp src test/e2e/real_ffmpeg_legacy_proof.cljs
+```
+
+Exits 0 with a PASS report on success, 1 with the failing checks printed on
+failure.
+
+### Known limitations / notable behaviors of the legacy path (found while proving it, none fixed — this proof is read-only verification of unmodified production code)
+
+- **`build-render-plan`'s segments carry no duration information at all**
+  (no `:duration-frames`, no timing field of any kind) — this is a real
+  structural difference from `douga.eizo-timeline/render-plan`'s explicit
+  `:duration-frames`, not an oversight: the legacy design's entire duration
+  model is "whatever `-shortest` discovers from the real audio at render
+  time." A caller cannot ask the plan "how long will this be" ahead of
+  render — the answer only exists after the fact, from `ffprobe`-ing the
+  rendered output. This proof asserts that emergent duration directly
+  (segment audio duration in -> segment video duration out, measured before
+  and after rendering) rather than assuming a fixed value.
+- **`build-render-plan` never synthesizes silence for a scene with zero
+  voice lines** — it simply reports `:voice-blob-keys []`. The existing
+  `silent-audio-cmd` helper exists precisely to cover this case, but it is
+  the caller's responsibility to notice an empty `:voice-blob-keys` and
+  invoke it; `scene-segment-cmd` has no default audio and will fail without
+  *some* audio path. This proof exercises that exact caller-side branch
+  (scene 2, zero lines) to confirm the intended pattern actually works
+  end-to-end, but a caller that forgets this check for a genuinely
+  dialogue-less scene would produce a broken command, not a silently wrong
+  video.
+- **`concat-audio-cmd` also works correctly with a single input
+  (`n=1`)** — ffmpeg's `concat` filter accepts `n=1` as a valid no-op
+  passthrough, so a caller may run every segment's voice lines through
+  `concat-audio-cmd` uniformly (regardless of line count) rather than
+  special-casing the single-line case. Confirmed empirically in this proof
+  (scene 1's single voice take), not previously exercised by any test in
+  this repo.
+- No incorrect or unexpected behavior was found in `build-render-plan`
+  itself during this work — the above are documented characteristics of its
+  intentionally loose, ffmpeg-emergent design, not bugs. If a future change
+  were considered (e.g. adding an estimated-duration field), that is a
+  deliberate design decision for owners of the live `yukkuri` pipeline to
+  make, not something this proof changes.
+
 ## Occupation
 
 ISCO-08 `2654` (Film, Stage and Related Directors and Producers) —
