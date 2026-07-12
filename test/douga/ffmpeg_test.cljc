@@ -108,3 +108,73 @@
                                                :to-duration-frames 96
                                                :transition-duration-frames 48
                                                :transition-type :slide})))))
+
+(deftest xfade-chain-cmd-shape
+  (testing "3 clips / 2 chained transitions: builds ONE filter_complex with 2 xfade stages,
+           the second stage consuming the first stage's output label (not a raw source)"
+    (let [segments [{:frame-blob-key "a.png" :duration-frames 96}   ;; 4.0s @ 24fps
+                    {:frame-blob-key "b.png" :duration-frames 96}   ;; 4.0s @ 24fps
+                    {:frame-blob-key "c.png" :duration-frames 96}]  ;; 4.0s @ 24fps
+          transitions [{:duration-frames 48 :transition-type :dissolve}   ;; 2.0s
+                       {:duration-frames 48 :transition-type :wipe}]      ;; 2.0s
+          cmd (ffmpeg/xfade-chain-cmd segments transitions "out.mp4"
+                                      {:width 320 :height 240 :fps 24})
+          filter-str (str (second (drop-while #(not= "-filter_complex" %) cmd)))]
+      (is (= "ffmpeg" (first cmd)))
+      (is (= ["a.png" "b.png" "c.png"]
+             (->> cmd (partition 2 1) (filter #(= "-i" (first %))) (map second))))
+      (is (str/includes? filter-str "xfade=transition=fade"))
+      (is (str/includes? filter-str "xfade=transition=wipeleft"))
+      ;; stage 2 must consume stage 1's OUTPUT label ([vx1]) as an input --
+      ;; not [v1] (which would silently discard the accumulated overlap).
+      (is (re-find #"\[vx1\]\[v2\]xfade=" filter-str))
+      (is (not (re-find #"\[v1\]\[v2\]xfade=" filter-str)))
+      ;; stage 1 offset = D_0 - t1 = 4.0 - 2.0 = 2.0
+      ;; stage 2 offset = D_1 - t2 = (4.0+4.0-2.0) - 2.0 = 4.0  (NOT 4.0-2.0=2.0,
+      ;; the wrong answer a naive per-clip-duration loop would produce)
+      (let [[_ off1] (re-find #"xfade=transition=fade:duration=([0-9.]+):offset=([0-9.]+)\[vx1\]" filter-str)
+            offs (re-seq #"offset=([0-9.]+)" filter-str)]
+        (is (= 2.0 #?(:clj (Double/parseDouble off1) :cljs (js/parseFloat off1))))
+        (is (= [2.0 4.0] (mapv (fn [[_ o]] #?(:clj (Double/parseDouble o) :cljs (js/parseFloat o))) offs))))
+      (is (some #(= "[v]" %) cmd))
+      (is (some #(str/includes? (str %) "scale=320:240") cmd))))
+  (testing "final output duration honors BOTH overlaps: sum(clip durations) - sum(transition durations)"
+    ;; not asserted directly on the argv (ffmpeg computes that at render
+    ;; time) -- this documents the arithmetic the offsets above encode:
+    ;; 4.0+4.0+4.0 - 2.0-2.0 = 8.0s, matching kami.eizo.timeline's own
+    ;; chained-overlap timeline-duration arithmetic.
+    (is (= 8.0 (- (+ 4.0 4.0 4.0) 2.0 2.0))))
+  (testing "degenerates correctly to a single stage for exactly 2 clips / 1 transition"
+    (let [cmd (ffmpeg/xfade-chain-cmd
+               [{:frame-blob-key "a.png" :duration-frames 96}
+                {:frame-blob-key "b.png" :duration-frames 96}]
+               [{:duration-frames 48 :transition-type :dissolve}]
+               "out.mp4" {:width 320 :height 240 :fps 24})
+          filter-str (str (second (drop-while #(not= "-filter_complex" %) cmd)))]
+      (is (re-find #"\[v0\]\[v1\]xfade=transition=fade:duration=2.0:offset=2.0\[v\]" filter-str))))
+  (testing "throws when segment/transition counts don't line up (need N-1 transitions for N segments)"
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (ffmpeg/xfade-chain-cmd
+                  [{:frame-blob-key "a.png" :duration-frames 96}
+                   {:frame-blob-key "b.png" :duration-frames 96}
+                   {:frame-blob-key "c.png" :duration-frames 96}]
+                  [{:duration-frames 48 :transition-type :dissolve}]
+                  "out.mp4" {:width 320 :height 240 :fps 24}))))
+  (testing "throws when a later transition's duration exceeds the chain's accumulated duration so far"
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (ffmpeg/xfade-chain-cmd
+                  [{:frame-blob-key "a.png" :duration-frames 24}    ;; 1.0s
+                   {:frame-blob-key "b.png" :duration-frames 24}    ;; 1.0s
+                   {:frame-blob-key "c.png" :duration-frames 96}]   ;; 4.0s
+                  [{:duration-frames 12 :transition-type :dissolve} ;; 0.5s, D_1 = 1.5s
+                   {:duration-frames 48 :transition-type :wipe}]    ;; 2.0s > D_1 = 1.5s -- should throw
+                  "out.mp4" {:width 320 :height 240 :fps 24}))))
+  (testing "throws for an unknown transition-type in any stage before building any argv"
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (ffmpeg/xfade-chain-cmd
+                  [{:frame-blob-key "a.png" :duration-frames 96}
+                   {:frame-blob-key "b.png" :duration-frames 96}
+                   {:frame-blob-key "c.png" :duration-frames 96}]
+                  [{:duration-frames 48 :transition-type :dissolve}
+                   {:duration-frames 48 :transition-type :slide}]
+                  "out.mp4" {:width 320 :height 240 :fps 24})))))
