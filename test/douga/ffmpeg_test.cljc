@@ -62,3 +62,31 @@
   (testing "concat-list-text escapes single quotes"
     (is (= "file 'a.mp4'\n" (ffmpeg/concat-list-text ["a.mp4"])))
     (is (str/includes? (ffmpeg/concat-list-text ["it's.mp4"]) "'\\''"))))
+
+(deftest xfade-transition-cmd-shape
+  (testing "builds a real xfade filter_complex crossfade, offset/duration in seconds"
+    (let [cmd (ffmpeg/xfade-transition-cmd "a.png" "b.png" "out.mp4"
+                                           {:width 320 :height 240 :fps 24
+                                            :from-duration-frames 96
+                                            :to-duration-frames 96
+                                            :transition-duration-frames 48})
+          filter-str (str (second (drop-while #(not= "-filter_complex" %) cmd)))]
+      (is (= "ffmpeg" (first cmd)))
+      (is (= ["a.png" "b.png"] (->> cmd (partition 2 1) (filter #(= "-i" (first %))) (map second))))
+      (is (str/includes? filter-str "xfade=transition=fade"))
+      ;; duration/offset formatting is clj "2.0" vs cljs "2" (native JS
+      ;; number->string) -- assert on the parsed numeric value, not the
+      ;; literal string, so this test passes identically on both platforms.
+      (let [[_ dur] (re-find #"duration=([0-9.]+):offset=" filter-str)
+            [_ off] (re-find #"offset=([0-9.]+)\[v\]" filter-str)]
+        (is (= 2.0 #?(:clj (Double/parseDouble dur) :cljs (js/parseFloat dur))))
+        (is (= 2.0 #?(:clj (Double/parseDouble off) :cljs (js/parseFloat off)))))
+      (is (some #(= "[v]" %) cmd))
+      (is (some #(str/includes? (str %) "scale=320:240") cmd))))
+  (testing "throws when the transition duration exceeds clip A's own duration"
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (ffmpeg/xfade-transition-cmd "a.png" "b.png" "out.mp4"
+                                              {:width 320 :height 240 :fps 24
+                                               :from-duration-frames 24
+                                               :to-duration-frames 96
+                                               :transition-duration-frames 48})))))

@@ -110,6 +110,64 @@
 (defn concat-segments-cmd [list-path out-path]
   ["ffmpeg" "-y" "-f" "concat" "-safe" "0" "-i" list-path "-c" "copy" out-path])
 
+(defn xfade-transition-cmd
+  "A real crossfade merge of two adjacent clips bridged by a
+  kami.eizo.timeline `:dissolve` transition, into ONE continuous output
+  video via ffmpeg's `xfade` filter — douga's dissolve render path (the
+  hard-cut path is scene-segment-cmd + concat-segments-cmd; this is the
+  alternative for a transition-bridged pair, see douga.eizo-timeline
+  render-plan's :video-transitions and this repo's README).
+
+  from-frame-path / to-frame-path: still-image sources for clip A / clip B
+  (looped for their own full natural duration, same convention as
+  scene-segment-cmd's frame-path argument).
+
+  opts:
+    :width :height :fps          -- same as scene-segment-cmd.
+    :from-duration-frames        -- clip A's OWN full duration in frames
+                                     (kami.eizo.timeline :clip/duration --
+                                     NOT overlap-adjusted).
+    :to-duration-frames          -- clip B's OWN full duration in frames.
+    :transition-duration-frames  -- the dissolve's duration in frames
+                                     (kami.eizo.timeline :transition/duration).
+
+  kami.eizo.timeline's overlap semantics (kami.eizo.timeline/validate-transition:
+  clip B's :clip/timeline-start = clip A's clip-end - transition duration,
+  i.e. the two clips overlap by exactly the transition's duration) map
+  directly onto ffmpeg xfade's own offset/duration semantics: offset (the
+  point in stream 0 where the crossfade begins) = duration-a - transition
+  duration; duration = transition duration. Total output duration =
+  duration-a + duration-b - transition duration — the same
+  overlap-consumes-shared-frames arithmetic kami.eizo.timeline already
+  uses, so a plan built from an already-validated EDL never needs to
+  re-derive it.
+
+  `transition=fade` is a genuine linear alpha crossfade, not a hard cut or
+  a fade-to-black: verified empirically (see test/e2e/real_dissolve_proof.cljs
+  and this repo's README) — a red->blue dissolve samples ~50/50 R/B channel
+  contribution at the transition's 50% point, and the blend shifts
+  monotonically across the transition window."
+  [from-frame-path to-frame-path out-path
+   {:keys [width height fps from-duration-frames to-duration-frames transition-duration-frames]}]
+  (let [from-s (/ (double from-duration-frames) fps)
+        to-s (/ (double to-duration-frames) fps)
+        trans-s (/ (double transition-duration-frames) fps)
+        offset-s (- from-s trans-s)]
+    (when (neg? offset-s)
+      (throw (ex-info "douga.ffmpeg/xfade-transition-cmd: transition-duration-frames exceeds from-duration-frames"
+                       {:transition-duration-frames transition-duration-frames
+                        :from-duration-frames from-duration-frames})))
+    ["ffmpeg" "-y"
+     "-loop" "1" "-t" (str from-s) "-i" from-frame-path
+     "-loop" "1" "-t" (str to-s) "-i" to-frame-path
+     "-filter_complex"
+     (str "[0:v]scale=" width ":" height ":force_original_aspect_ratio=decrease,"
+          "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=" fps "[v0];"
+          "[1:v]scale=" width ":" height ":force_original_aspect_ratio=decrease,"
+          "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=" fps "[v1];"
+          "[v0][v1]xfade=transition=fade:duration=" trans-s ":offset=" offset-s "[v]")
+     "-map" "[v]" "-r" (str fps) "-c:v" "libx264" "-pix_fmt" "yuv420p" out-path]))
+
 (defn bgm-mix-cmd [video-path bgm-path out-path]
   ["ffmpeg" "-y" "-i" video-path "-stream_loop" "-1" "-i" bgm-path
    "-filter_complex" "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a]"

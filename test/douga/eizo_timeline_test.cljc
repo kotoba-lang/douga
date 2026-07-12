@@ -62,17 +62,45 @@
         plan (det/render-plan timeline)]
     (is (= [0] (map :scene-index (:segments plan))))))
 
-(deftest render-plan-rejects-video-track-transitions
-  (let [timeline (build-timeline)
-        video-track (first (:timeline/tracks timeline))
-        [c0 c1] (:track/clips video-track)
-        tr (tl/transition {:id :t1 :type :dissolve
-                            :from-clip (:clip/id c0) :to-clip (:clip/id c1)
-                            :duration 12})
-        video-track (assoc video-track :track/transitions [tr])
-        timeline (assoc-in timeline [:timeline/tracks 0] video-track)]
-    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
-                 (det/render-plan timeline)))))
+(deftest render-plan-rejects-unsupported-video-track-transitions
+  (testing ":wipe (and other non-:dissolve types) still have no ffmpeg render path"
+    (let [timeline (build-timeline)
+          video-track (first (:timeline/tracks timeline))
+          [c0 c1] (:track/clips video-track)
+          tr (tl/transition {:id :t1 :type :wipe
+                              :from-clip (:clip/id c0) :to-clip (:clip/id c1)
+                              :duration 12})
+          video-track (assoc video-track :track/transitions [tr])
+          timeline (assoc-in timeline [:timeline/tracks 0] video-track)]
+      (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                   (det/render-plan timeline))))))
+
+(deftest render-plan-accepts-dissolve-video-track-transitions
+  (testing ":dissolve now has a real render path (douga.ffmpeg/xfade-transition-cmd) -- no longer rejected"
+    (let [timeline (build-timeline)
+          video-track (first (:timeline/tracks timeline))
+          ;; scene1 (72 frames, timeline-start 96) overlaps scene0's tail by
+          ;; 12 frames per kami.eizo.timeline's overlap semantics: move
+          ;; scene1 back so clip-end(scene0)=96 == timeline-start(scene1)+duration(12).
+          video-track (update video-track :track/clips
+                               (fn [clips]
+                                 (mapv (fn [c] (if (= 1 (:douga/scene-index c))
+                                                 (assoc c :clip/timeline-start 84)
+                                                 c))
+                                       clips)))
+          [c0 c1] (sort-by :clip/timeline-start (:track/clips video-track))
+          tr (tl/transition {:id :t1 :type :dissolve
+                              :from-clip (:clip/id c0) :to-clip (:clip/id c1)
+                              :duration 12})
+          video-track (assoc video-track :track/transitions [tr])
+          timeline (assoc-in timeline [:timeline/tracks 0] video-track)
+          validation (tl/validate-timeline timeline)]
+      (is (:valid? validation) (pr-str (:errors validation)))
+      (let [plan (det/render-plan timeline)]
+        (is (= [0 1] (map :scene-index (:segments plan))))
+        (is (= [96 72] (map :duration-frames (:segments plan))))
+        (is (= [{:from-scene-index 0 :to-scene-index 1 :duration-frames 12}]
+               (:video-transitions plan)))))))
 
 (deftest render-plan-handles-no-bgm
   (let [timeline (assoc (build-timeline) :timeline/markers [])
