@@ -25,7 +25,8 @@ returned command vectors and attach blob storage themselves.
 ```
 
 Also: `parse-resolution`, `concat-audio-cmd`, `silent-audio-cmd`,
-`concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`.
+`concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`, and
+`xfade-transition-cmd` (real dissolve-transition rendering, see below).
 
 Timeline keys are read leniently (`:sceneIndex` / `:scene-index` /
 `"scene_index"` …) so plans built from JSON, EDN, or kebab-case sources all
@@ -79,10 +80,36 @@ ffmpeg discover each scene's actual duration at render time via
 known frame count up front — supply it from a duration-estimation or
 pre-rendered-audio pass if you want this entry point.
 
-**v0 gap**: video-track transitions (dissolve/wipe/etc.) are rejected
-(`ex-info`), not silently ignored — douga's ffmpeg builders only ever
-produce hard cuts today. Wiring dissolve/wipe to a real `xfade`
-`filter_complex` is a follow-up, not part of this rewire.
+**`:dissolve` video-track transitions now render for real** (ADR-2607121400
+Wave 5): `render-plan` no longer rejects a `:dissolve` transition between
+two adjacent `:video`-track clips — it surfaces it as a `:video-transitions`
+entry, and `douga.ffmpeg/xfade-transition-cmd` turns that into a real
+ffmpeg `xfade` `filter_complex` crossfade (see "Real dissolve-transition
+render proof" below). Other transition types (`:wipe`/etc.) are still
+rejected with `ex-info`, not silently ignored or silently downgraded to a
+hard cut — only `:dissolve` has a render path today.
+
+```clojure
+;; render-plan surfaces a :dissolve transition (kami.eizo.timeline overlap
+;; semantics: clip B's :clip/timeline-start = clip A's clip-end - transition
+;; duration) as :video-transitions, keyed by scene-index:
+(det/render-plan timeline)
+;; => {:segments [{:scene-index 0 :duration-frames 96 ...}
+;;                {:scene-index 1 :duration-frames 96 ...}]
+;;     :video-transitions [{:from-scene-index 0 :to-scene-index 1 :duration-frames 48}]
+;;     ...}
+
+;; feed the bridged pair + the transition's duration to xfade-transition-cmd:
+(ffmpeg/xfade-transition-cmd frame-a-path frame-b-path out-path
+                             {:width 320 :height 240 :fps 24
+                              :from-duration-frames 96
+                              :to-duration-frames 96
+                              :transition-duration-frames 48})
+;; => ["ffmpeg" "-y" "-loop" "1" "-t" "4" "-i" frame-a-path
+;;     "-loop" "1" "-t" "4" "-i" frame-b-path
+;;     "-filter_complex" "...xfade=transition=fade:duration=2:offset=2[v]..."
+;;     "-map" "[v]" "-r" "24" "-c:v" "libx264" "-pix_fmt" "yuv420p" out-path]
+```
 
 ## Real-ffmpeg execution proof (`test/e2e/`)
 
@@ -137,6 +164,78 @@ nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljs
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
 failure.
+
+## Real dissolve-transition render proof (`test/e2e/real_dissolve_proof.cljs`)
+
+Wave-8's `real_ffmpeg_proof.cljs` above deliberately only covers hard cuts —
+that was `douga.eizo-timeline`'s entire v0 scope, and a `:dissolve`
+video-track transition was rejected with `ex-info` rather than silently
+ignored. `test/e2e/real_dissolve_proof.cljs` is the same real-subprocess
+proof pattern applied to the render path that closes that gap: a real
+`xfade` crossfade, driven through the real `douga.eizo-timeline/render-plan`
+and the real `douga.ffmpeg/xfade-transition-cmd`, not a hand-typed ffmpeg
+invocation.
+
+It:
+
+1. builds a real `kami.eizo.timeline` EDL — a 4.0s red clip and a 4.0s blue
+   clip, bridged by a 2.0s `:dissolve` transition. Per
+   `kami.eizo.timeline`'s overlap semantics (`validate-transition`: clip B's
+   `:clip/timeline-start` = clip A's `clip-end` minus the transition's
+   duration), the two clips overlap by exactly 2.0s, so the EDL's total
+   duration is 4.0+4.0-2.0=**6.0s**, not 8.0s — the proof asserts this via
+   `kami.eizo.timeline/timeline-duration` before rendering anything, so a
+   regression that ignored the overlap (silently concatenating full clip
+   durations) would be caught before it ever reached ffmpeg;
+2. generates the two solid-color stills locally via `ffmpeg -f lavfi
+   color=...` (no external assets, no network);
+3. drives that EDL through the **real** `douga.eizo-timeline/render-plan`
+   (which no longer throws for this — confirming the v0 rejection is gone)
+   and asserts the returned `:video-transitions` entry matches the EDL's
+   transition exactly;
+4. builds the **real** `douga.ffmpeg/xfade-transition-cmd` argv from the
+   render-plan's segments and executes it as a single real `ffmpeg` child
+   process (one invocation produces the entire crossfade-merged output —
+   no separate per-clip render + concat step, since `-c copy` concat can't
+   express a blend);
+5. verifies with real `ffprobe` that the output is exactly 6.0s (not 8.0s),
+   at the right resolution;
+6. samples real decoded pixels at 5 checkpoints — before the transition
+   window, and at 25%/50%/75%/after within/past it — and asserts: pure red
+   before, pure blue after, and at 25/50/75% a **genuine, monotonically
+   shifting blend** (R strictly decreasing, B strictly increasing across
+   all 5 checkpoints, G staying ~0 throughout with no corruption), with an
+   almost-exactly-even 50/50 R/B split at the transition's midpoint — this
+   is the actual proof that a crossfade is happening, not a hard cut
+   (which would show pure red until 4.0s then instantly pure blue) and not
+   a broken/no-op filter (which would show a corrupted or black frame).
+
+Last verified run: all 17 checks passed — 320×240 output, exactly 6.000000s
+(ffprobe), and real sampled RGB at each checkpoint: `#fc0000` (before,
+t=1.0s) → `#bc003d` (25%, t=2.5s) → `#7d007d` (50%, t=3.0s, an almost exact
+125/125 R/B split) → `#3d00be` (75%, t=3.5s) → `#0000fd` (after, t=5.0s).
+The non-255/non-0 pure-color values (252/253 instead of 255, and the
+symmetric-but-not-exactly-half 188/61 and 61/190 at 25%/75%) are ordinary
+yuv420p/H.264 lossy-encoding drift from `libx264`, not a douga or filter
+defect.
+
+Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
+`kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
+
+```bash
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_dissolve_proof.cljs
+```
+
+Exits 0 with a PASS report on success, 1 with the failing checks printed on
+failure.
+
+**Maturity note**: this proves the dissolve render path for a single
+transition between exactly two clips on a video-only timeline. Multi-clip
+timelines with several transitions, transitions combined with per-scene
+audio/bgm muxing, and other transition types (`:wipe`/etc.) are not yet
+wired end-to-end — see `douga.eizo-timeline`'s `:video-transitions` output
+(one entry per transition) as the extension point for a caller wanting to
+chain several dissolves across more than two clips.
 
 ## Occupation
 
