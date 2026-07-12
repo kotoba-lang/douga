@@ -205,6 +205,113 @@
           "[v0][v1]xfade=transition=" xfade-mode ":duration=" trans-s ":offset=" offset-s "[v]")
      "-map" "[v]" "-r" (str fps) "-c:v" "libx264" "-pix_fmt" "yuv420p" out-path]))
 
+(defn xfade-chain-cmd
+  "N-clip chained-transition render — the generalization of
+  xfade-transition-cmd for a video track with TWO OR MORE sequential
+  transitions bridging THREE OR MORE clips in a row (e.g. clip1 --T1-->
+  clip2 --T2--> clip3 --T3--> clip4 ...), into ONE continuous output video
+  via a single ffmpeg invocation with N-1 chained `xfade` filter_complex
+  stages. xfade-transition-cmd itself only ever builds a 2-input, 1-stage
+  graph — it has no notion of chaining, and looping it per-pair would not
+  produce a correct chained graph (see the offset arithmetic below), which
+  is why this is a separate function rather than a wrapper around it.
+
+  THE CHAINING GOTCHA this function exists to get right: ffmpeg's `xfade`
+  `offset` is relative to the START of its own first input stream. For
+  stage 1 that first input is clip 1 itself, so offset_1 is the same
+  `from-duration - transition-duration` arithmetic as xfade-transition-cmd.
+  But stage 2's first input is NOT clip 2 or clip 1 alone — it is stage 1's
+  OUTPUT stream, whose duration is already `duration(clip1) + duration(clip2)
+  - duration(T1)` (clip 1's and clip 2's combined, overlap-consumed length).
+  A naive per-pair loop that reused each clip's own raw duration for every
+  stage's offset would therefore get every stage after the first WRONG.
+  The correct offset is computed against the chain's CUMULATIVE output
+  duration so far, matching kami.eizo.timeline's own chained-overlap
+  `timeline-duration` arithmetic exactly (validate-transition's overlap
+  invariant applied transitively down the chain, not just pairwise):
+
+    D_0 = duration(clip_0)
+    D_k = D_(k-1) + duration(clip_k) - duration(transition_k)   (k = 1..n-1)
+    offset_k = D_(k-1) - duration(transition_k)                 (stage k, 1-indexed)
+
+  Each stage k's filter_complex clause therefore chains onto the PREVIOUS
+  stage's output label, not a raw source label: stage 1 is
+  `[v0][v1]xfade=...:offset=offset_1[vx1]`, stage 2 is
+  `[vx1][v2]xfade=...:offset=offset_2[vx2]` (or `[v]` if it's the final
+  stage), and so on — never `[v1][v2]xfade=...` for stage 2, which would
+  silently discard the accumulated overlap from stage 1.
+
+  segments: ordered vector of N maps `{:frame-blob-key :duration-frames}`,
+  one per clip, in timeline order — the same shape
+  `douga.eizo-timeline/render-plan`'s `:segments` already carries.
+  transitions: ordered vector of exactly (count segments)-1 maps
+  `{:duration-frames :transition-type}`; transitions[k] (0-indexed) bridges
+  segments[k] and segments[k+1] — the same adjacency
+  `douga.eizo-timeline/render-plan`'s `:video-transitions` already carries
+  for a video track with sequential transitions (sort by
+  `:from-scene-index` first if a track's transitions weren't authored in
+  timeline order). `:transition-type` defaults to `:dissolve` per entry,
+  same as xfade-transition-cmd; unknown types throw ex-info up front
+  (before any ffmpeg argv is built), same fail-loud discipline.
+  opts: :width :height :fps — same as xfade-transition-cmd.
+
+  Total output duration = sum of every clip's own duration minus the sum
+  of every transition's duration (each transition consumes exactly its own
+  duration of shared overlap, once, chain-wide — never double-consumed
+  even when two transitions both touch the same middle clip)."
+  [segments transitions out-path {:keys [width height fps]}]
+  (let [n (count segments)]
+    (when (< n 2)
+      (throw (ex-info "douga.ffmpeg/xfade-chain-cmd: need at least 2 segments"
+                       {:segments n})))
+    (when (not= (count transitions) (dec n))
+      (throw (ex-info "douga.ffmpeg/xfade-chain-cmd: need exactly (count segments)-1 transitions"
+                       {:segments n :transitions (count transitions)})))
+    (doseq [tr transitions]
+      (let [tt (or (:transition-type tr) :dissolve)]
+        (when-not (get xfade-mode-by-transition-type tt)
+          (throw (ex-info (str "douga.ffmpeg/xfade-chain-cmd: transition-type " (pr-str tt)
+                                " has no ffmpeg xfade mode mapping (known: "
+                                (pr-str (set (keys xfade-mode-by-transition-type))) ")")
+                           {:transition-type tt})))))
+    (let [durs-s (mapv (fn [seg] (/ (double (:duration-frames seg)) fps)) segments)
+          trans-s (mapv (fn [tr] (/ (double (:duration-frames tr)) fps)) transitions)
+          inputs (mapcat (fn [seg d-s] ["-loop" "1" "-t" (str d-s) "-i" (:frame-blob-key seg)])
+                          segments durs-s)
+          scale-filters
+          (apply str
+                 (map (fn [i]
+                        (str "[" i ":v]scale=" width ":" height ":force_original_aspect_ratio=decrease,"
+                             "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=" fps
+                             "[v" i "];"))
+                      (range n)))
+          last-stage (dec n) ;; stage index k runs 1..n-1; the final stage is k = n-1
+          {:keys [filter-str]}
+          (reduce
+           (fn [{:keys [acc-dur-s filter-str] :as _acc} k]
+             (let [t-s (nth trans-s (dec k))
+                   offset-s (- acc-dur-s t-s)
+                   _ (when (neg? offset-s)
+                       (throw (ex-info (str "douga.ffmpeg/xfade-chain-cmd: transition " k
+                                             " duration exceeds the chain's accumulated duration so far")
+                                        {:stage k :accumulated-duration-s acc-dur-s
+                                         :transition-duration-s t-s})))
+                   tt (or (:transition-type (nth transitions (dec k))) :dissolve)
+                   mode (get xfade-mode-by-transition-type tt)
+                   in0 (if (= k 1) "v0" (str "vx" (dec k)))
+                   in1 (str "v" k)
+                   out-label (if (= k last-stage) "v" (str "vx" k))
+                   next-dur-s (- (+ acc-dur-s (nth durs-s k)) t-s)]
+               {:acc-dur-s next-dur-s
+                :filter-str (str filter-str "[" in0 "][" in1 "]xfade=transition=" mode
+                                  ":duration=" t-s ":offset=" offset-s "[" out-label "]"
+                                  (when-not (= k last-stage) ";"))}))
+           {:acc-dur-s (first durs-s) :filter-str ""}
+           (range 1 n))]
+      (vec (concat ["ffmpeg" "-y"] inputs
+                   ["-filter_complex" (str scale-filters filter-str)
+                    "-map" "[v]" "-r" (str fps) "-c:v" "libx264" "-pix_fmt" "yuv420p" out-path])))))
+
 (defn bgm-mix-cmd [video-path bgm-path out-path]
   ["ffmpeg" "-y" "-i" video-path "-stream_loop" "-1" "-i" bgm-path
    "-filter_complex" "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a]"

@@ -25,9 +25,13 @@ returned command vectors and attach blob storage themselves.
 ```
 
 Also: `parse-resolution`, `concat-audio-cmd`, `silent-audio-cmd`,
-`concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`, and
+`concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`,
 `xfade-transition-cmd` (real `:dissolve`- and `:wipe`-transition
-rendering, see below).
+rendering between exactly two clips, see below), and `xfade-chain-cmd`
+(the same real transition rendering, generalized to a whole video track
+with two or more sequential transitions across three or more clips in a
+single ffmpeg invocation, see "Real chained multi-transition render
+proof" below).
 
 Timeline keys are read leniently (`:sceneIndex` / `:scene-index` /
 `"scene_index"` …) so plans built from JSON, EDN, or kebab-case sources all
@@ -332,17 +336,138 @@ nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljs
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
 failure.
 
-**Maturity note**: this proves the `:dissolve` and `:wipe` render paths
-each for a single transition between exactly two clips on a video-only
-timeline. Multi-clip timelines with several transitions, transitions
-combined with per-scene audio/bgm muxing, other `:wipe` directions (only
-`wipeleft` is wired — `wiperight`/`wipeup`/`wipedown` and the many other
-`xfade` modes ffmpeg exposes are not), and other transition types entirely
-(`:slide`/etc.) are not yet wired end-to-end — see
-`douga.eizo-timeline`'s `:video-transitions` output (one entry per
-transition, now carrying `:transition-type`) as the extension point for a
-caller wanting to chain several transitions across more than two clips or
-add a new xfade mode to `douga.ffmpeg/xfade-mode-by-transition-type`.
+## Real chained multi-transition render proof (`test/e2e/real_chained_transitions_proof.cljs`)
+
+The dissolve and wipe proofs above each only ever exercise ONE transition
+between exactly TWO clips — that gap (multi-clip timelines with several
+transitions chained end-to-end) used to be an explicit, honestly-documented
+unwired extension point (see this section's previous "Maturity note", now
+below). It no longer is: `douga.ffmpeg/xfade-chain-cmd` is a new command
+builder that generalizes `xfade-transition-cmd` to a whole video track with
+**two or more sequential transitions across three or more clips**, all
+rendered by a **single ffmpeg invocation** with N-1 chained `xfade`
+filter_complex stages.
+
+**The chaining arithmetic this closes a real gap on**: ffmpeg xfade's
+`offset` is relative to the start of its own first input stream. For a
+chain's first stage, that's clip 1's own duration minus transition 1's
+duration — the same arithmetic `xfade-transition-cmd` already used. But a
+chain's SECOND (and every later) stage's first input isn't a raw source
+clip, it's the PREVIOUS stage's output stream — whose duration already
+reflects every upstream transition's overlap-consumption. A naive
+per-pair loop that reused each clip's own raw duration for every stage's
+offset would get every stage after the first wrong (it would place the
+later transition too early, overlapping the earlier one instead of
+starting cleanly after it). `xfade-chain-cmd` computes each stage's offset
+against the chain's *cumulative* output duration instead:
+
+```
+D_0 = duration(clip_0)
+D_k = D_(k-1) + duration(clip_k) - duration(transition_k)   (k = 1..n-1)
+offset_k = D_(k-1) - duration(transition_k)                 (stage k)
+```
+
+and chains each stage's filter_complex clause onto the *previous* stage's
+output label (`[vx1]`, `[vx2]`, …), never a raw source label, so the
+accumulated overlap is never silently discarded.
+
+`test/e2e/real_chained_transitions_proof.cljs` is the same real-subprocess
+proof pattern as the dissolve/wipe proofs, but for a 3-clip, 2-transition
+chain, driven through the real `douga.eizo-timeline/render-plan` (which
+already supported an arbitrary number of `:video-transitions` per track —
+no fix needed there) and the real, new `douga.ffmpeg/xfade-chain-cmd`. It:
+
+1. builds a real `kami.eizo.timeline` EDL — a 4.0s red clip, a 4.0s lime
+   clip, and a 4.0s blue clip, bridged by a 1.5s `:dissolve` transition
+   (red→lime) then a 1.5s `:wipe` transition (lime→blue). Per
+   `kami.eizo.timeline`'s overlap semantics applied transitively down the
+   chain, total EDL duration is 4.0+4.0+4.0-1.5-1.5=**9.0s**, not 12.0s —
+   asserted via `kami.eizo.timeline/timeline-duration` before rendering
+   anything;
+2. generates the three solid-color stills locally via `ffmpeg -f lavfi
+   color=...` (no external assets, no network);
+3. drives that EDL through the **real** `douga.eizo-timeline/render-plan`
+   and asserts both `:video-transitions` entries come back in order with
+   the right types (`:dissolve` then `:wipe`);
+4. builds the **real** `douga.ffmpeg/xfade-chain-cmd` argv from the
+   render-plan's 3 segments + 2 transitions and executes it as ONE real
+   `ffmpeg` child process — one invocation produces the entire
+   dissolve-then-wipe merged output, no per-pair intermediate renders;
+5. verifies with real `ffprobe` that the output is exactly 9.0s (not
+   12.0s), at the right resolution;
+6. the pixel-sampling proof is the crux, chosen specifically so a wrong
+   chained offset would be visible, not just plausible-looking: the two
+   transition durations (1.5s each) and clip durations (4.0s each) are
+   picked so the FINAL merged output has a genuine ~1.0s pure-lime
+   **steady gap between the two transition windows** —
+   `[0.0,2.5)` pure red → `[2.5,4.0)` dissolve blend → `[4.0,5.0)` **pure
+   lime** → `[5.0,6.5)` wipe sweep → `[6.5,9.0)` pure blue. That steady
+   gap only exists in the real output if stage 2's offset was computed
+   against the chain's *accumulated* duration (6.5s) rather than clip
+   B's own raw duration (4.0s) — the exact naive-loop bug the arithmetic
+   above targets; get it wrong and the wipe would start 2.5s early,
+   colliding with (or overlapping into) the tail of the dissolve. The
+   proof reuses both single-transition proofs' techniques within this one
+   render: dissolve's fixed-point/multi-timestamp sampling for the
+   red→lime blend, wipe's multi-x-position/fixed-timestamp sampling for
+   the lime→blue sweep, plus a direct pure-color sample in the steady gap
+   itself and after the final transition.
+
+Last verified run: all 26 checks passed — 320×240 output, exactly
+9.000000s (ffprobe), and real sampled RGB/classifications at every
+checkpoint: `#fc0000` pure red (t=1.0s, before T1) → `#bc3e00`/`#7d7e00`/
+`#3cbd00` (T1 25%/50%/75%, a monotonic red→green blend with an almost
+exact 125/126 split at the midpoint) → `#00fe00` **pure lime at t=4.5s,
+the steady gap between T1 and T2** (the chaining-crux checkpoint) →
+a moving lime/blue spatial boundary at T2's 25%/50%/75% checkpoints
+(1→2→4 blue-classified x-positions out of 5, sweeping right-to-left, the
+same `wipeleft` signature as the standalone wipe proof) → `#0000fd` pure
+blue (t=7.5s, after T2). The generated filter_complex graph (for this
+proof's exact parameters) was:
+
+```
+[0:v]scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v0];
+[1:v]scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v1];
+[2:v]scale=320:240:force_original_aspect_ratio=decrease,pad=320:240:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24[v2];
+[v0][v1]xfade=transition=fade:duration=1.5:offset=2.5[vx1];
+[vx1][v2]xfade=transition=wipeleft:duration=1.5:offset=5[v]
+```
+
+(one line per `;`-terminated clause here for readability — the real argv
+is a single `-filter_complex` string). Note stage 2's `offset=5` — the
+correct chain-accumulated value (`D_1 - t2` = `6.5 - 1.5`), not the wrong
+value a naive per-clip-duration loop would produce (`4.0 - 1.5 = 2.5`,
+which would collide with stage 1's own transition window).
+
+Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
+`kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
+
+```bash
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_chained_transitions_proof.cljs
+```
+
+Exits 0 with a PASS report on success, 1 with the failing checks printed on
+failure.
+
+**Maturity note**: `:dissolve` and `:wipe` now have a real render path both
+for a single transition between two clips (`xfade-transition-cmd`) and for
+a chain of two or more sequential transitions across three or more clips on
+a single video track in one ffmpeg invocation (`xfade-chain-cmd`, proven
+above). Still not wired: transitions combined with per-scene audio/bgm
+muxing in the same invocation (the transition proofs are video-track-only;
+audio muxing today only exists in the hard-cut path's `bgm-mix-cmd`), other
+`:wipe` directions (only `wipeleft` is wired — `wiperight`/`wipeup`/
+`wipedown` and the many other `xfade` modes ffmpeg exposes are not), other
+transition types entirely (`:slide`/etc.), and non-linear transition
+topologies (e.g. two transitions both touching the same clip from
+different tracks, or a transition graph that isn't a simple clip-1→clip-2→
+clip-3→… chain) — `xfade-chain-cmd` assumes its `segments`/`transitions`
+arguments are already in adjacent chain order (sort a track's
+`:video-transitions` by `:from-scene-index` first if they weren't authored
+in timeline order; see its docstring). See `douga.eizo-timeline`'s
+`:video-transitions` output (one entry per transition, already supporting
+any number per track — no fix was needed there, only in the ffmpeg
+command-building side) as the extension point for further work.
 
 ## Real-ffmpeg execution proof for the LEGACY path (`test/e2e/real_ffmpeg_legacy_proof.cljs`)
 
