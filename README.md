@@ -26,7 +26,8 @@ returned command vectors and attach blob storage themselves.
 
 Also: `parse-resolution`, `concat-audio-cmd`, `silent-audio-cmd`,
 `concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`, and
-`xfade-transition-cmd` (real dissolve-transition rendering, see below).
+`xfade-transition-cmd` (real `:dissolve`- and `:wipe`-transition
+rendering, see below).
 
 Timeline keys are read leniently (`:sceneIndex` / `:scene-index` /
 `"scene_index"` …) so plans built from JSON, EDN, or kebab-case sources all
@@ -80,36 +81,55 @@ ffmpeg discover each scene's actual duration at render time via
 known frame count up front — supply it from a duration-estimation or
 pre-rendered-audio pass if you want this entry point.
 
-**`:dissolve` video-track transitions now render for real** (ADR-2607121400
-Wave 5): `render-plan` no longer rejects a `:dissolve` transition between
-two adjacent `:video`-track clips — it surfaces it as a `:video-transitions`
-entry, and `douga.ffmpeg/xfade-transition-cmd` turns that into a real
-ffmpeg `xfade` `filter_complex` crossfade (see "Real dissolve-transition
-render proof" below). Other transition types (`:wipe`/etc.) are still
-rejected with `ex-info`, not silently ignored or silently downgraded to a
-hard cut — only `:dissolve` has a render path today.
+**`:dissolve` and `:wipe` video-track transitions now render for real**
+(ADR-2607121400 Wave 5 -- dissolve, Wave 6 -- wipe): `render-plan` no
+longer rejects a `:dissolve` or `:wipe` transition between two adjacent
+`:video`-track clips — it surfaces it as a `:video-transitions` entry
+(carrying `:transition-type`), and `douga.ffmpeg/xfade-transition-cmd`
+turns that into a real ffmpeg `xfade` `filter_complex` — a genuine
+crossfade for `:dissolve` (see "Real dissolve-transition render proof"
+below), a genuine moving spatial wipe boundary for `:wipe` (see "Real
+wipe-transition render proof" below). Other transition types (`:slide`/
+`:wipe-tl`/etc.) are still rejected with `ex-info`, not silently ignored
+or silently downgraded to a hard cut — only `:dissolve` and `:wipe` have a
+render path today.
 
 ```clojure
-;; render-plan surfaces a :dissolve transition (kami.eizo.timeline overlap
-;; semantics: clip B's :clip/timeline-start = clip A's clip-end - transition
-;; duration) as :video-transitions, keyed by scene-index:
+;; render-plan surfaces a transition (kami.eizo.timeline overlap semantics:
+;; clip B's :clip/timeline-start = clip A's clip-end - transition duration)
+;; as :video-transitions, keyed by scene-index, carrying :transition-type:
 (det/render-plan timeline)
 ;; => {:segments [{:scene-index 0 :duration-frames 96 ...}
 ;;                {:scene-index 1 :duration-frames 96 ...}]
-;;     :video-transitions [{:from-scene-index 0 :to-scene-index 1 :duration-frames 48}]
+;;     :video-transitions [{:from-scene-index 0 :to-scene-index 1 :duration-frames 48
+;;                          :transition-type :dissolve}]  ;; or :wipe
 ;;     ...}
 
-;; feed the bridged pair + the transition's duration to xfade-transition-cmd:
+;; feed the bridged pair + the transition's duration/type to xfade-transition-cmd:
 (ffmpeg/xfade-transition-cmd frame-a-path frame-b-path out-path
                              {:width 320 :height 240 :fps 24
                               :from-duration-frames 96
                               :to-duration-frames 96
-                              :transition-duration-frames 48})
-;; => ["ffmpeg" "-y" "-loop" "1" "-t" "4" "-i" frame-a-path
-;;     "-loop" "1" "-t" "4" "-i" frame-b-path
-;;     "-filter_complex" "...xfade=transition=fade:duration=2:offset=2[v]..."
-;;     "-map" "[v]" "-r" "24" "-c:v" "libx264" "-pix_fmt" "yuv420p" out-path]
+                              :transition-duration-frames 48
+                              :transition-type :dissolve})  ;; or :wipe
+;; :dissolve => ["ffmpeg" "-y" "-loop" "1" "-t" "4" "-i" frame-a-path
+;;               "-loop" "1" "-t" "4" "-i" frame-b-path
+;;               "-filter_complex" "...xfade=transition=fade:duration=2:offset=2[v]..."
+;;               "-map" "[v]" "-r" "24" "-c:v" "libx264" "-pix_fmt" "yuv420p" out-path]
+;; :wipe    => ...xfade=transition=wipeleft:duration=2:offset=2[v]...
+;;             (same offset/duration arithmetic -- only the xfade `transition=`
+;;             mode differs; :transition-type defaults to :dissolve if omitted,
+;;             so existing :dissolve-only callers are unaffected)
 ```
+
+`:wipe`'s ffmpeg xfade mode is `wipeleft` (chosen from the fuller set ffmpeg's
+`xfade` filter exposes — `wipeleft`/`wiperight`/`wipeup`/`wipedown`,
+`slideleft`/etc., `circlecrop`, and many more; see `ffmpeg -h filter=xfade`
+for the full list on your installed version): a hard-edged boundary sweeps
+**right-to-left** across the frame as the transition progresses, revealing
+clip B starting from the frame's right edge while clip A remains visible on
+the not-yet-swept left portion — a genuinely different render mechanism
+from `:dissolve`'s per-pixel alpha blend, not a re-skin of it.
 
 ## Real-ffmpeg execution proof (`test/e2e/`)
 
@@ -229,13 +249,100 @@ nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_dissolve_proof.cljs
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
 failure.
 
-**Maturity note**: this proves the dissolve render path for a single
-transition between exactly two clips on a video-only timeline. Multi-clip
-timelines with several transitions, transitions combined with per-scene
-audio/bgm muxing, and other transition types (`:wipe`/etc.) are not yet
-wired end-to-end — see `douga.eizo-timeline`'s `:video-transitions` output
-(one entry per transition) as the extension point for a caller wanting to
-chain several dissolves across more than two clips.
+## Real wipe-transition render proof (`test/e2e/real_wipe_proof.cljs`)
+
+`:wipe` is the same shape of gap the dissolve proof above closed for
+`:dissolve`: a `:wipe` video-track transition used to be rejected with
+`ex-info` (still true for any *other* transition type — `:slide`/
+`:wipe-tl`/etc.). `test/e2e/real_wipe_proof.cljs` is the same
+real-subprocess proof pattern, driven through the real
+`douga.eizo-timeline/render-plan` and the real
+`douga.ffmpeg/xfade-transition-cmd` (with `:transition-type :wipe`, which
+selects ffmpeg xfade's `wipeleft` mode instead of `fade`) — but **a
+different verification strategy**, because a wipe is a moving *spatial*
+boundary, not a *temporal* blend the way a dissolve is: sampling one fixed
+pixel across several timestamps (the dissolve proof's strategy) would just
+show a hard cut partway through — a wipe has to be caught by sampling
+*several x-positions* at one fixed instant to see the two-region spatial
+split, repeated at a few instants to prove the split's position genuinely
+moves.
+
+It:
+
+1. builds a real `kami.eizo.timeline` EDL — the same 4.0s red / 4.0s blue
+   two-clip shape as the dissolve proof, bridged by a 2.0s `:wipe`
+   transition instead of `:dissolve` (same overlap semantics, same
+   4.0+4.0-2.0=**6.0s** total duration, asserted the same way before
+   rendering anything);
+2. generates the two solid-color stills locally via `ffmpeg -f lavfi
+   color=...` (no external assets, no network);
+3. drives that EDL through the **real** `douga.eizo-timeline/render-plan`
+   (which no longer throws for `:wipe`) and asserts the returned
+   `:video-transitions` entry matches the EDL's transition exactly,
+   including the new `:transition-type :wipe` field;
+4. builds the **real** `douga.ffmpeg/xfade-transition-cmd` argv (passing
+   `:transition-type :wipe` from the render-plan entry) and asserts the
+   generated `filter_complex` string literally contains
+   `xfade=transition=wipeleft` (not `fade`) before executing it as a
+   single real `ffmpeg` child process;
+5. verifies with real `ffprobe` that the output is exactly 6.0s (not 8.0s),
+   at the right resolution — same overlap-honoring check as the dissolve
+   proof, now for `:wipe`;
+6. samples real decoded pixels at **5 x-positions (10%/30%/50%/70%/90% of
+   frame width, fixed y=center) at each of 3 fixed timestamps** (25%/50%/
+   75% through the transition window) and asserts: at every timestamp,
+   every sampled x-position classifies as solid red or solid blue (a
+   **sharp two-region boundary**, not a smooth per-pixel blend the way
+   dissolve's fixed point shows a shifting mix over time); the leftmost
+   sample (x=10%) is red at all three checkpoints and the rightmost
+   (x=90%) is blue at all three (clip A's still-uncovered region and clip
+   B's already-revealed region are stable at the frame's edges); and the
+   count of blue-classified positions strictly increases (1→2→4 across
+   25%→50%→75%) while red strictly decreases (4→3→1) — this is the actual
+   proof that the reveal boundary is genuinely *moving* across space as
+   the transition progresses, not a static split or a broken/no-op filter.
+
+Last verified run: all 16 checks passed — 320×240 output, exactly
+6.000000s (ffprobe), and real sampled classifications at the 5 x-positions
+(10/30/50/70/90% of width) across the 3 checkpoints:
+
+| t (progress) | x=10% | x=30% | x=50% | x=70% | x=90% |
+|---|---|---|---|---|---|
+| 2.5s (25%) | `#fc0000` red | `#fc0000` red | `#fc0000` red | `#fc0000` red | `#0000fd` blue |
+| 3.0s (50%) | `#fc0000` red | `#fc0000` red | `#fc0000` red | `#0000fd` blue | `#0000fd` blue |
+| 3.5s (75%) | `#fc0000` red | `#0000fd` blue | `#0000fd` blue | `#0000fd` blue | `#0000fd` blue |
+
+The reveal boundary (`wipeleft`) sweeps right-to-left as progress advances:
+at 25% only the rightmost sample has flipped to blue, by 50% the boundary
+has swept past the midpoint, and by 75% only the leftmost sample remains
+red — a genuinely moving spatial edge, contrasted with dissolve's fixed
+50/50 blend-at-every-position at its own transition midpoint. Every sampled
+region is a *solid* color (no intermediate blended pixel value observed at
+this sampling resolution) — the same 252/253-not-255 drift seen in the
+dissolve proof is ordinary `libx264`/yuv420p lossy-encoding rounding, not a
+douga or filter defect.
+
+Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
+`kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
+
+```bash
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljs
+```
+
+Exits 0 with a PASS report on success, 1 with the failing checks printed on
+failure.
+
+**Maturity note**: this proves the `:dissolve` and `:wipe` render paths
+each for a single transition between exactly two clips on a video-only
+timeline. Multi-clip timelines with several transitions, transitions
+combined with per-scene audio/bgm muxing, other `:wipe` directions (only
+`wipeleft` is wired — `wiperight`/`wipeup`/`wipedown` and the many other
+`xfade` modes ffmpeg exposes are not), and other transition types entirely
+(`:slide`/etc.) are not yet wired end-to-end — see
+`douga.eizo-timeline`'s `:video-transitions` output (one entry per
+transition, now carrying `:transition-type`) as the extension point for a
+caller wanting to chain several transitions across more than two clips or
+add a new xfade mode to `douga.ffmpeg/xfade-mode-by-transition-type`.
 
 ## Real-ffmpeg execution proof for the LEGACY path (`test/e2e/real_ffmpeg_legacy_proof.cljs`)
 

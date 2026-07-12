@@ -136,8 +136,9 @@
           (println (pr-str plan))
           (check! "render-plan no longer throws for a :dissolve transition (v0 used to reject all)"
                   true "render-plan returned normally")
-          (check! "render-plan surfaces :video-transitions with the :dissolve entry"
-                  (= [{:from-scene-index 0 :to-scene-index 1 :duration-frames trans-f}]
+          (check! "render-plan surfaces :video-transitions with the :dissolve entry (:transition-type :dissolve)"
+                  (= [{:from-scene-index 0 :to-scene-index 1 :duration-frames trans-f
+                       :transition-type :dissolve}]
                      (:video-transitions plan))
                   (pr-str (:video-transitions plan)))
           (check! "render-plan segments carry :duration-frames"
@@ -148,12 +149,14 @@
           (let [seg-a (first (:segments plan))
                 seg-b (second (:segments plan))
                 out-path (path/join workdir "dissolve.mp4")
+                tr-entry (first (:video-transitions plan))
                 cmd (ffmpeg/xfade-transition-cmd
                      (:frame-blob-key seg-a) (:frame-blob-key seg-b) out-path
                      {:width (:width plan) :height (:height plan) :fps (:fps plan)
                       :from-duration-frames (:duration-frames seg-a)
                       :to-duration-frames (:duration-frames seg-b)
-                      :transition-duration-frames trans-f})]
+                      :transition-duration-frames trans-f
+                      :transition-type (:transition-type tr-entry)})]
             (println "\n=== douga.ffmpeg/xfade-transition-cmd ===")
             (println (pr-str cmd))
             (exec! cmd)
