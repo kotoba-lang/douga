@@ -84,6 +84,60 @@ pre-rendered-audio pass if you want this entry point.
 produce hard cuts today. Wiring dissolve/wipe to a real `xfade`
 `filter_complex` is a follow-up, not part of this rewire.
 
+## Real-ffmpeg execution proof (`test/e2e/`)
+
+douga is deliberately I/O-free: `douga.ffmpeg` / `douga.eizo-timeline` only
+*return* ffmpeg command vectors, they never shell out. `test/douga/*_test.cljc`
+(run via `clojure -M:test`) only assert the **shape** of those vectors (right
+flags, right ordering) — nothing in this repo's own test suite has ever
+actually handed a generated command vector to a real `ffmpeg` binary and
+checked that it runs and produces correct output.
+
+`test/e2e/real_ffmpeg_proof.cljs` (nbb) closes that gap. It:
+
+1. builds a real [`kami.eizo.timeline`](https://github.com/kotoba-lang/kami-eizo-timeline)
+   EDL — 3 scenes (red / lime / blue), 2.0s / 1.5s / 2.5s long at 24fps,
+   placed back-to-back on the `:video` track with **no transitions** (a hard
+   cut — the only kind `douga.eizo-timeline` supports, see "v0 gap" above),
+   each with a matching-duration voice tone on the `:audio` track and a bgm
+   marker;
+2. generates the scenes' still-frame and voice/bgm audio sources locally via
+   `ffmpeg -f lavfi` (`color=`/`sine=` — no external assets, no network);
+3. drives that EDL through the **real** `douga.eizo-timeline/render-plan` and
+   the **real** `douga.ffmpeg/scene-segment-cmd` /
+   `douga.ffmpeg/concat-segments-cmd` / `douga.ffmpeg/bgm-mix-cmd` command
+   builders (nothing hand-typed — the argv vectors executed are exactly what
+   douga's own code returns);
+4. executes every returned command vector as a real `ffmpeg` child process,
+   synchronously, and checks each output file actually exists and is
+   non-empty;
+5. verifies the final assembled video with real `ffprobe` (duration,
+   dimensions) and by extracting real pixels at 9 timestamps (including right
+   before/after each hard cut) via a real `ffmpeg` decode + crop, comparing
+   the sampled color against whichever scene
+   `kami.eizo.timeline/clip-at-frame` says should be showing at that frame —
+   i.e. it doesn't just check "some video came out", it checks the right
+   color is on screen at the right time, cross-referenced against the EDL's
+   own frame-lookup query.
+
+Last verified run: all 23 checks passed — 320×240 output, ~6.06s duration
+(expected 6.00s; the ~60ms delta is normal concat-demuxer `-c copy` DTS
+rounding from B-frame reordering across segment boundaries, not a douga
+defect), and every sampled pixel matched its expected scene color within a
+40/255-channel tolerance (actual observed drift was 1–3/255, from ordinary
+H.264/yuv420p lossy encoding of a flat color field).
+
+Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
+`kotoba-lang/kami-eizo-timeline` (the sha this repo's `deps.edn` pins) whose
+`src/` is reachable via classpath:
+
+```bash
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljs
+```
+
+Exits 0 with a PASS report on success, 1 with the failing checks printed on
+failure.
+
 ## Occupation
 
 ISCO-08 `2654` (Film, Stage and Related Directors and Producers) —
