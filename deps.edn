@@ -1,5 +1,9 @@
 {:paths ["src"]
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        io.github.kotoba-lang/kami-eizo-timeline
+        {:git/url "https://github.com/kotoba-lang/kami-eizo-timeline"
+         :git/sha "0cf14835d57df0b094dea92a507b39700eb295ec"
+         :deps/root "."}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
