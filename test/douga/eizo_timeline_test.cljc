@@ -1,0 +1,80 @@
+(ns douga.eizo-timeline-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [kami.eizo.timeline :as tl]
+            [kami.eizo.timeline.timecode :as tc]
+            [douga.eizo-timeline :as det]))
+
+(defn- build-timeline []
+  (let [tb (tc/make-timebase 24 1 false)
+        scene0 (det/scene-clip {:scene-index 0 :frame-blob-key "frame-0"
+                                 :timeline-start 0 :duration-frames 96})
+        scene1 (det/scene-clip {:scene-index 1 :frame-blob-key "frame-1"
+                                 :timeline-start 96 :duration-frames 72})
+        video-track (tl/track {:id :video-1 :type :video :clips [scene0 scene1]})
+        v0-l1 (det/voice-clip {:scene-index 0 :line-index 1 :voice-blob-key "v-0-1"
+                                :text "second" :speaker "Right"
+                                :timeline-start 48 :duration-frames 48})
+        v0-l0 (det/voice-clip {:scene-index 0 :line-index 0 :voice-blob-key "v-0-0"
+                                :text "first" :speaker "Left"
+                                :timeline-start 0 :duration-frames 48})
+        v1-l0 (det/voice-clip {:scene-index 1 :line-index 0 :voice-blob-key "v-1-0"
+                                :text "next scene" :speaker nil
+                                :timeline-start 96 :duration-frames 72})
+        audio-track (tl/track {:id :audio-1 :type :audio :clips [v0-l1 v0-l0 v1-l0]})
+        bgm (det/bgm-marker* {:bgm-blob-key "bgm-key" :duration-frames 168})]
+    (assoc (tl/timeline {:timebase tb :tracks [video-track audio-track] :markers [bgm]})
+           :douga/resolution "1080p")))
+
+(deftest render-plan-orders-scenes-and-voices
+  (let [timeline (build-timeline)]
+    (is (:valid? (tl/validate-timeline timeline)) "fixture must be a valid EDL")
+    (let [plan (det/render-plan timeline)]
+      (is (= 2 (count (:segments plan))))
+      (is (= [0 1] (map :scene-index (:segments plan))))
+      (let [seg0 (first (:segments plan))]
+        (is (= "frame-0" (:frame-blob-key seg0)))
+        (is (= ["v-0-0" "v-0-1"] (:voice-blob-keys seg0)))
+        (is (= ["first" "second"] (:texts seg0)))
+        (is (= ["left" "right"] (:speakers seg0))))
+      (is (= "bgm-key" (:bgm-blob-key plan)))
+      (is (= 1920 (:width plan)))
+      (is (= 1080 (:height plan)))
+      (is (= 24 (:fps plan))))))
+
+(deftest render-plan-defaults-resolution-when-absent
+  (let [timeline (dissoc (build-timeline) :douga/resolution)
+        plan (det/render-plan timeline)]
+    (is (= 1280 (:width plan)))
+    (is (= 720 (:height plan)))))
+
+(deftest render-plan-fps-rounds-ntsc-timebase
+  (testing "23.976fps rounds to 24 for ffmpeg -r, matching frame-rate-round semantics"
+    (let [timeline (assoc (build-timeline) :timeline/timebase tc/ntsc-23976)
+          plan (det/render-plan timeline)]
+      (is (= 24 (:fps plan))))))
+
+(deftest render-plan-skips-scene-without-frame
+  (let [timeline (build-timeline)
+        video-track (first (:timeline/tracks timeline))
+        pruned-video (update video-track :track/clips
+                              (fn [clips] (remove #(= 1 (:douga/scene-index %)) clips)))
+        timeline (assoc-in timeline [:timeline/tracks 0] pruned-video)
+        plan (det/render-plan timeline)]
+    (is (= [0] (map :scene-index (:segments plan))))))
+
+(deftest render-plan-rejects-video-track-transitions
+  (let [timeline (build-timeline)
+        video-track (first (:timeline/tracks timeline))
+        [c0 c1] (:track/clips video-track)
+        tr (tl/transition {:id :t1 :type :dissolve
+                            :from-clip (:clip/id c0) :to-clip (:clip/id c1)
+                            :duration 12})
+        video-track (assoc video-track :track/transitions [tr])
+        timeline (assoc-in timeline [:timeline/tracks 0] video-track)]
+    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                 (det/render-plan timeline)))))
+
+(deftest render-plan-handles-no-bgm
+  (let [timeline (assoc (build-timeline) :timeline/markers [])
+        plan (det/render-plan timeline)]
+    (is (nil? (:bgm-blob-key plan)))))
