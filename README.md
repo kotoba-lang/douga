@@ -25,13 +25,17 @@ returned command vectors and attach blob storage themselves.
 ```
 
 Also: `parse-resolution`, `concat-audio-cmd`, `silent-audio-cmd`,
-`concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`,
+`video-segment-cmd`, `concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`,
 `xfade-transition-cmd` (real `:dissolve`- and `:wipe`-transition
 rendering between exactly two clips, see below), and `xfade-chain-cmd`
 (the same real transition rendering, generalized to a whole video track
 with two or more sequential transitions across three or more clips in a
 single ffmpeg invocation, see "Real chained multi-transition render
 proof" below).
+
+`scene-segment-cmd` is for a still frame;
+`video-segment-cmd` trims a moving source and supplies silent stereo audio so
+mixed still/video sequences keep a concat-safe stream layout.
 
 Timeline keys are read leniently (`:sceneIndex` / `:scene-index` /
 `"scene_index"` …) so plans built from JSON, EDN, or kebab-case sources all
