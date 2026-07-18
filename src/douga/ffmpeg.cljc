@@ -107,6 +107,20 @@
               "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1")
    "-r" (str fps) "-shortest" "-c:v" "libx264" "-pix_fmt" "yuv420p" "-c:a" "aac" out-path])
 
+(defn video-segment-cmd
+  "Trim a moving-image source and normalize it into a concat-safe segment.
+  A generated silent audio stream keeps every segment's stream layout stable
+  before the project's music mix is applied."
+  [video-path out-path {:keys [source-start-sec duration-sec width height fps sample-rate]
+                        :or {source-start-sec 0 duration-sec 1 sample-rate 48000}}]
+  ["ffmpeg" "-y" "-ss" (str source-start-sec) "-i" video-path
+   "-f" "lavfi" "-i" (str "anullsrc=r=" sample-rate ":cl=stereo")
+   "-t" (str duration-sec)
+   "-vf" (str "scale=" width ":" height ":force_original_aspect_ratio=decrease,"
+               "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1")
+   "-r" (str fps) "-map" "0:v:0" "-map" "1:a:0"
+   "-c:v" "libx264" "-pix_fmt" "yuv420p" "-c:a" "aac" "-shortest" out-path])
+
 (defn concat-segments-cmd [list-path out-path]
   ["ffmpeg" "-y" "-f" "concat" "-safe" "0" "-i" list-path "-c" "copy" out-path])
 

@@ -59,6 +59,14 @@
                                         {:width 1280 :height 720 :fps 30})]
       (is (some #(str/includes? (str %) "scale=1280:720") cmd))
       (is (some #(= "30" %) cmd))))
+  (testing "video-segment-cmd trims moving media and supplies stable audio"
+    (let [cmd (ffmpeg/video-segment-cmd "source.mov" "out.mp4"
+                                        {:source-start-sec 1.5 :duration-sec 2
+                                         :width 1920 :height 1080 :fps 30})]
+      (is (= ["ffmpeg" "-y" "-ss" "1.5" "-i" "source.mov"] (subvec cmd 0 6)))
+      (is (some #(= "anullsrc=r=48000:cl=stereo" %) cmd))
+      (is (some #(str/includes? (str %) "scale=1920:1080") cmd))
+      (is (= "out.mp4" (last cmd)))))
   (testing "concat-list-text escapes single quotes"
     (is (= "file 'a.mp4'\n" (ffmpeg/concat-list-text ["a.mp4"])))
     (is (str/includes? (ffmpeg/concat-list-text ["it's.mp4"]) "'\\''"))))
