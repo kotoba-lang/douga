@@ -334,3 +334,38 @@
 (defn concat-list-text [paths]
   (apply str (for [p paths]
                (str "file '" (str/replace p #"'" (constantly "'\\''")) "'\n"))))
+
+;; ── frame sampling (video -> stills) ────────────────────────────────────────
+;; The mirror-image operation of the rest of this namespace (stills/clips ->
+;; video): given ONE generated video clip, pull N representative still frames
+;; back out of it for downstream candidate-selection (e.g. mangaka's
+;; seedance-clip -> panel pipeline). Pure argv/timestamp planning only — the
+;; caller shells out to ffmpeg/ffprobe and reads the resulting files.
+
+(defn ffprobe-duration-cmd
+  "ffprobe argv (no binary name change) that prints just the container
+  duration in seconds on stdout (parse as a double)."
+  [video-path]
+  ["ffprobe" "-v" "error" "-show_entries" "format=duration"
+   "-of" "csv=p=0" video-path])
+
+(defn sample-timestamps
+  "N evenly-spaced timestamps (seconds) inside (0, duration-sec), excluding
+  the exact first/last instants (often black/incomplete frames on generated
+  clips). n=1 samples the midpoint. Clamps n to >=1 and duration-sec to a
+  positive number so a zero/garbled probe never divides by zero."
+  [duration-sec n]
+  (let [d (max 0.001 (double (or duration-sec 0)))
+        n (max 1 (long (or n 1)))]
+    (vec (for [i (range n)]
+           (* d (/ (inc i) (double (inc n))))))))
+
+(defn extract-frame-cmd
+  "ffmpeg argv extracting ONE still frame at `timestamp-sec` into `out-path`
+  (a .png/.jpg path). `-ss` before `-i` seeks the demuxer (fast, keyframe
+  tolerant enough for a representative-candidate sample — exact-frame
+  accuracy isn't required here, unlike an edit-point cut)."
+  [video-path timestamp-sec out-path]
+  ["ffmpeg" "-y" "-loglevel" "error"
+   "-ss" (str timestamp-sec) "-i" video-path
+   "-frames:v" "1" "-q:v" "2" out-path])
