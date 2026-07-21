@@ -186,3 +186,26 @@
                   [{:duration-frames 48 :transition-type :dissolve}
                    {:duration-frames 48 :transition-type :slide}]
                   "out.mp4" {:width 320 :height 240 :fps 24})))))
+
+(deftest sample-timestamps-spreads-evenly-inside-the-clip
+  (is (= [2.0] (ffmpeg/sample-timestamps 4.0 1)))
+  (let [ts (ffmpeg/sample-timestamps 10.0 3)]
+    (is (= 3 (count ts)))
+    (is (apply < ts))
+    (is (every? #(< 0 % 10.0) ts)))
+  (testing "clamps a zero/garbled duration and a non-positive n instead of dividing by zero"
+    (is (= 1 (count (ffmpeg/sample-timestamps 0 0))))
+    (is (every? pos? (ffmpeg/sample-timestamps nil 2)))))
+
+(deftest ffprobe-duration-cmd-shape
+  (let [cmd (ffmpeg/ffprobe-duration-cmd "clip.mp4")]
+    (is (= "ffprobe" (first cmd)))
+    (is (= "clip.mp4" (last cmd)))
+    (is (some #(str/includes? (str %) "duration") cmd))))
+
+(deftest extract-frame-cmd-shape
+  (let [cmd (ffmpeg/extract-frame-cmd "clip.mp4" 1.5 "frame.png")]
+    (is (= "ffmpeg" (first cmd)))
+    (is (= "frame.png" (last cmd)))
+    (is (some #{"1.5"} cmd))
+    (is (some #{"-frames:v"} cmd))))
