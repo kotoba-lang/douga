@@ -124,6 +124,53 @@
 (defn concat-segments-cmd [list-path out-path]
   ["ffmpeg" "-y" "-f" "concat" "-safe" "0" "-i" list-path "-c" "copy" out-path])
 
+(defn- overlay-input-args
+  "One overlay -> its ffmpeg input args. A looping bed (BGM) needs
+  `-stream_loop -1` BEFORE its `-i`; a one-shot cue (SFX) does not."
+  [{:keys [file loop?]}]
+  (cond-> [] loop? (conj "-stream_loop" "-1") :always (conj "-i" file)))
+
+(defn- overlay-filter-chain
+  "One overlay -> `[N:a]adelay=…,volume=…[oN]` — delayed to its cue time and
+  gain-staged so a bed sits under narration instead of fighting it. adelay
+  wants milliseconds per channel; `all=1` applies one value to every channel
+  so this works for mono and stereo sources alike."
+  [i {:keys [at-sec gain]}]
+  (let [ms (long (Math/round (* 1000.0 (double (or at-sec 0)))))
+        g (double (or gain 1.0))]
+    (str "[" i ":a]adelay=" ms ":all=1,volume=" g "[o" i "]")))
+
+(defn audio-overlay-mix-cmd
+  "Mix N audio overlays (a looping BGM bed, one-shot SFX cues, or both) onto
+  an already-assembled video's own audio, without re-encoding the video.
+
+  `overlays` is an ordered seq of maps:
+    :file    -- audio file path (required)
+    :at-sec  -- cue time in seconds from the start of the video (default 0)
+    :gain    -- linear volume multiplier (default 1.0)
+    :loop?   -- loop the source for the whole video (a BGM bed; default false)
+
+  `duration=first` keeps the video's own length authoritative: a looping bed
+  never extends the output, and a cue whose source runs past the end is cut.
+  Returns the base command unchanged when there is nothing to mix, so callers
+  can stay branch-free; a no-overlay call is a plain remux, not an error."
+  [video-path overlays out-path]
+  (let [overlays (vec (remove (comp str/blank? str :file) overlays))]
+    (if (empty? overlays)
+      ["ffmpeg" "-y" "-i" video-path "-c" "copy" out-path]
+      ;; input 0 is the video (its audio is [0:a]); overlays are inputs 1..N.
+      (let [chains (map-indexed (fn [i o] (overlay-filter-chain (inc i) o)) overlays)
+            labels (apply str "[0:a]" (map-indexed (fn [i _] (str "[o" (inc i) "]")) overlays))
+            n (inc (count overlays))]
+        (vec (concat ["ffmpeg" "-y" "-i" video-path]
+                     (mapcat overlay-input-args overlays)
+                     ["-filter_complex"
+                      (str (str/join ";" chains) ";"
+                           labels "amix=inputs=" n
+                           ":duration=first:dropout_transition=0:normalize=0[a]")
+                      "-map" "0:v" "-map" "[a]"
+                      "-c:v" "copy" "-c:a" "aac" out-path]))))))
+
 (def ^:private xfade-mode-by-transition-type
   "kami.eizo.timeline :transition/type -> ffmpeg xfade's `transition=` mode
   string. :dissolve -> `fade` (a genuine linear alpha crossfade, a temporal
