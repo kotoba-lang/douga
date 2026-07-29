@@ -242,3 +242,22 @@
       (is (some #{"-c:v"} cmd))
       (is (= "copy" (nth cmd (inc (.indexOf ^java.util.List cmd "-c:v")))))
       (is (= "aac" (nth cmd (inc (.indexOf ^java.util.List cmd "-c:a"))))))))
+
+(deftest video-segment-cmd-audio-and-padding
+  (testing "no audio-path -> silent stream, as before"
+    (let [cmd (ffmpeg/video-segment-cmd "clip.mp4" "seg.mp4"
+                                        {:duration-sec 7 :width 720 :height 1280 :fps 30})]
+      (is (some #(str/includes? (str %) "anullsrc") cmd))))
+  (testing "audio-path becomes input 1 and is mapped as the segment's audio"
+    (let [cmd (ffmpeg/video-segment-cmd "clip.mp4" "seg.mp4"
+                                        {:duration-sec 7 :width 720 :height 1280 :fps 30
+                                         :audio-path "voice.wav"})]
+      (is (not-any? #(str/includes? (str %) "anullsrc") cmd))
+      (is (some #{"voice.wav"} cmd))
+      (is (some #{"1:a:0"} cmd))))
+  (testing "a short generated clip holds its last frame instead of going black"
+    (let [cmd (ffmpeg/video-segment-cmd "clip.mp4" "seg.mp4"
+                                        {:duration-sec 7 :width 720 :height 1280 :fps 30})
+          vf (str (second (drop-while #(not= "-vf" %) cmd)))]
+      (is (str/includes? vf "tpad=stop_mode=clone:stop_duration=7"))
+      (is (some #{"-t"} cmd)))))

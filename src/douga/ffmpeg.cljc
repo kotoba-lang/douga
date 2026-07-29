@@ -109,17 +109,31 @@
 
 (defn video-segment-cmd
   "Trim a moving-image source and normalize it into a concat-safe segment.
-  A generated silent audio stream keeps every segment's stream layout stable
-  before the project's music mix is applied."
-  [video-path out-path {:keys [source-start-sec duration-sec width height fps sample-rate]
+
+  `:audio-path` supplies the segment's own audio track (a narration line, say);
+  without it a generated silent stream is used instead. Either way every
+  segment ends up with the same stream layout, which is what lets the concat
+  demuxer stitch them and the project's music mix apply afterwards.
+
+  A generated clip is rarely exactly the length the plan asked for, so the
+  video is padded on its last frame (`tpad=stop_mode=clone`) before being cut
+  to `:duration-sec` — a short clip holds instead of leaving a black tail, and
+  a long one is trimmed."
+  [video-path out-path {:keys [source-start-sec duration-sec width height fps sample-rate
+                               audio-path]
                         :or {source-start-sec 0 duration-sec 1 sample-rate 48000}}]
-  ["ffmpeg" "-y" "-ss" (str source-start-sec) "-i" video-path
-   "-f" "lavfi" "-i" (str "anullsrc=r=" sample-rate ":cl=stereo")
-   "-t" (str duration-sec)
-   "-vf" (str "scale=" width ":" height ":force_original_aspect_ratio=decrease,"
-               "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1")
-   "-r" (str fps) "-map" "0:v:0" "-map" "1:a:0"
-   "-c:v" "libx264" "-pix_fmt" "yuv420p" "-c:a" "aac" "-shortest" out-path])
+  (vec
+   (concat
+    ["ffmpeg" "-y" "-ss" (str source-start-sec) "-i" video-path]
+    (if (str/blank? (str audio-path))
+      ["-f" "lavfi" "-i" (str "anullsrc=r=" sample-rate ":cl=stereo")]
+      ["-i" audio-path])
+    ["-t" (str duration-sec)
+     "-vf" (str "scale=" width ":" height ":force_original_aspect_ratio=decrease,"
+                "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1,"
+                "tpad=stop_mode=clone:stop_duration=" duration-sec)
+     "-r" (str fps) "-map" "0:v:0" "-map" "1:a:0"
+     "-c:v" "libx264" "-pix_fmt" "yuv420p" "-c:a" "aac" out-path])))
 
 (defn concat-segments-cmd [list-path out-path]
   ["ffmpeg" "-y" "-f" "concat" "-safe" "0" "-i" list-path "-c" "copy" out-path])
