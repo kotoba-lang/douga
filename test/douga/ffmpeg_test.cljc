@@ -209,3 +209,55 @@
     (is (= "frame.png" (last cmd)))
     (is (some #{"1.5"} cmd))
     (is (some #{"-frames:v"} cmd))))
+
+(deftest audio-overlay-mix-cmd-shape
+  (testing "no overlays -> plain remux, not an error"
+    (let [cmd (ffmpeg/audio-overlay-mix-cmd "v.mp4" [] "out.mp4")]
+      (is (= ["ffmpeg" "-y" "-i" "v.mp4" "-c" "copy" "out.mp4"] cmd))))
+  (testing "blank/absent files are dropped before deciding there is work to do"
+    (is (= ["ffmpeg" "-y" "-i" "v.mp4" "-c" "copy" "out.mp4"]
+           (ffmpeg/audio-overlay-mix-cmd "v.mp4" [{:file ""} {:file nil}] "out.mp4"))))
+  (testing "a looping bed gets -stream_loop before its own -i, and only it"
+    (let [cmd (ffmpeg/audio-overlay-mix-cmd
+               "v.mp4" [{:file "bgm.wav" :loop? true :gain 0.18}
+                        {:file "sfx.wav" :at-sec 7.5}]
+               "out.mp4")
+          idx (fn [x] (.indexOf ^java.util.List cmd x))]
+      (is (= 1 (count (filter #{"-stream_loop"} cmd))))
+      (is (< (idx "-stream_loop") (idx "bgm.wav")))
+      (is (< (idx "bgm.wav") (idx "sfx.wav")) "input order follows overlay order")))
+  (testing "cue time becomes adelay milliseconds and gain becomes volume"
+    (let [cmd (ffmpeg/audio-overlay-mix-cmd
+               "v.mp4" [{:file "bgm.wav" :loop? true :gain 0.18}
+                        {:file "sfx.wav" :at-sec 7.5}]
+               "out.mp4")
+          fc (str (second (drop-while #(not= "-filter_complex" %) cmd)))]
+      (is (str/includes? fc "[1:a]adelay=0:all=1,volume=0.18[o1]"))
+      (is (str/includes? fc "[2:a]adelay=7500:all=1,volume=1.0[o2]"))
+      (is (str/includes? fc "[0:a][o1][o2]amix=inputs=3"))
+      (is (str/includes? fc "duration=first") "the video stays length-authoritative")
+      (is (str/includes? fc "normalize=0") "amix must not duck the narration")))
+  (testing "video is stream-copied; only audio is re-encoded"
+    (let [cmd (ffmpeg/audio-overlay-mix-cmd "v.mp4" [{:file "b.wav"}] "out.mp4")]
+      (is (some #{"-c:v"} cmd))
+      (is (= "copy" (nth cmd (inc (.indexOf ^java.util.List cmd "-c:v")))))
+      (is (= "aac" (nth cmd (inc (.indexOf ^java.util.List cmd "-c:a"))))))))
+
+(deftest video-segment-cmd-audio-and-padding
+  (testing "no audio-path -> silent stream, as before"
+    (let [cmd (ffmpeg/video-segment-cmd "clip.mp4" "seg.mp4"
+                                        {:duration-sec 7 :width 720 :height 1280 :fps 30})]
+      (is (some #(str/includes? (str %) "anullsrc") cmd))))
+  (testing "audio-path becomes input 1 and is mapped as the segment's audio"
+    (let [cmd (ffmpeg/video-segment-cmd "clip.mp4" "seg.mp4"
+                                        {:duration-sec 7 :width 720 :height 1280 :fps 30
+                                         :audio-path "voice.wav"})]
+      (is (not-any? #(str/includes? (str %) "anullsrc") cmd))
+      (is (some #{"voice.wav"} cmd))
+      (is (some #{"1:a:0"} cmd))))
+  (testing "a short generated clip holds its last frame instead of going black"
+    (let [cmd (ffmpeg/video-segment-cmd "clip.mp4" "seg.mp4"
+                                        {:duration-sec 7 :width 720 :height 1280 :fps 30})
+          vf (str (second (drop-while #(not= "-vf" %) cmd)))]
+      (is (str/includes? vf "tpad=stop_mode=clone:stop_duration=7"))
+      (is (some #{"-t"} cmd)))))
