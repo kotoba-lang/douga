@@ -430,3 +430,63 @@
   ["ffmpeg" "-y" "-loglevel" "error"
    "-ss" (str timestamp-sec) "-i" video-path
    "-frames:v" "1" "-q:v" "2" out-path])
+
+(defn narrated-concat-cmd
+  "Concatenate generated clips that carry their own audio, duck that audio
+  under a delayed narration track, and cut the result to a fixed length.
+
+  This is the shape a localized short takes: N model-generated clips (each
+  with its own ambience/SFX from the generator), one synthesized voice track,
+  one master per language. Extracted 2026-08-11 from
+  `gftdcojp/ai-gftd-ghosthacker-shiropico/tools/assemble_localized_shorts.py`,
+  where the filter graph was a single unreadable string literal repeated for
+  every language.
+
+  Options (defaults are the values that repo measured against its own masters):
+    :native-gain     linear gain on the clips' own audio bed (0.32)
+    :voice-gain      linear gain on the narration (1.35)
+    :voice-delay-ms  narration offset; caption timings must use the same
+                     number, so callers should read it from here rather than
+                     writing 350 in two places (350)
+    :seconds         hard cut for the output; nil leaves it uncut (nil)
+    :crf/:preset/:pix-fmt/:audio-bitrate  x264/aac knobs (18 / medium /
+                     yuv420p / 192k)
+
+  `duration=first` on the amix keeps the concatenated video authoritative: a
+  narration that runs long is cut rather than extending the short."
+  [clip-paths narration-path out-path
+   {:keys [native-gain voice-gain voice-delay-ms seconds crf preset pix-fmt audio-bitrate]
+    :or {native-gain 0.32 voice-gain 1.35 voice-delay-ms 350
+         crf 18 preset "medium" pix-fmt "yuv420p" audio-bitrate "192k"}}]
+  (let [clips (vec (remove str/blank? clip-paths))
+        n (count clips)]
+    (when (zero? n)
+      (throw (ex-info "narrated-concat-cmd needs at least one clip" {})))
+    (let [;; each clip's PTS is rebased so concat does not inherit a generator's
+          ;; non-zero start time (a silent desync that only shows up on clip 2+)
+          resets (str/join "" (for [i (range n)] (str "[" i ":v]setpts=PTS-STARTPTS[v" i "];")))
+          pairs (str/join "" (for [i (range n)] (str "[v" i "][" i ":a]")))
+          voice-in (str n ":a")
+          graph (str resets
+                     pairs "concat=n=" n ":v=1:a=1[video][native];"
+                     "[native]volume=" native-gain "[nativeq];"
+                     "[" voice-in "]adelay=" voice-delay-ms "|" voice-delay-ms
+                     ",volume=" voice-gain "[voice];"
+                     "[nativeq][voice]amix=inputs=2:duration=first:dropout_transition=1[audio]")]
+      (vec (concat ["ffmpeg" "-y" "-hide_banner" "-loglevel" "error"]
+                   (mapcat (fn [c] ["-i" c]) clips)
+                   ["-i" narration-path
+                    "-filter_complex" graph
+                    "-map" "[video]" "-map" "[audio]"
+                    "-c:v" "libx264" "-preset" preset "-crf" (str crf)
+                    "-pix_fmt" pix-fmt "-c:a" "aac" "-b:a" audio-bitrate
+                    "-movflags" "+faststart"]
+                   (when seconds ["-t" (str seconds)])
+                   [out-path])))))
+
+(defn say-cmd
+  "macOS `say` argv for synthesizing narration to a file. Kept next to the
+  mix it feeds so the voice/rate that produced a master and the timings
+  measured from it cannot drift apart."
+  [{:keys [voice rate out text]}]
+  ["say" "-v" voice "-r" (str rate) "-o" out text])
