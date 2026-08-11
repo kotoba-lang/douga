@@ -261,3 +261,45 @@
           vf (str (second (drop-while #(not= "-vf" %) cmd)))]
       (is (str/includes? vf "tpad=stop_mode=clone:stop_duration=7"))
       (is (some #{"-t"} cmd)))))
+
+;; ---- narrated-concat, added 2026-08-11 -----------------------------------
+;; The expected argv is the one shiropico's assemble_localized_shorts.py
+;; emitted and shipped ep02-05 with. Keeping it verbatim is the point: the
+;; masters already on YouTube were rendered by that exact graph.
+
+(def ^:private shiropico-argv
+  ["ffmpeg" "-y" "-hide_banner" "-loglevel" "error"
+   "-i" "renders/ep02-reboot.mp4" "-i" "renders/ep02-root-cut.mp4" "-i" "masters/ep02-en.aiff"
+   "-filter_complex"
+   (str "[0:v]setpts=PTS-STARTPTS[v0];[1:v]setpts=PTS-STARTPTS[v1];"
+        "[v0][0:a][v1][1:a]concat=n=2:v=1:a=1[video][native];"
+        "[native]volume=0.32[nativeq];[2:a]adelay=350|350,volume=1.35[voice];"
+        "[nativeq][voice]amix=inputs=2:duration=first:dropout_transition=1[audio]")
+   "-map" "[video]" "-map" "[audio]" "-c:v" "libx264" "-preset" "medium"
+   "-crf" "18" "-pix_fmt" "yuv420p" "-c:a" "aac" "-b:a" "192k"
+   "-movflags" "+faststart" "-t" "20.2" "masters/shiropico-ep02-en.mp4"])
+
+(deftest narrated-concat-reproduces-the-shipped-graph
+  (is (= shiropico-argv
+         (ffmpeg/narrated-concat-cmd
+          ["renders/ep02-reboot.mp4" "renders/ep02-root-cut.mp4"]
+          "masters/ep02-en.aiff" "masters/shiropico-ep02-en.mp4"
+          {:seconds 20.2}))))
+
+(deftest narrated-concat-scales-past-two-clips
+  (let [cmd (ffmpeg/narrated-concat-cmd ["a.mp4" "b.mp4" "c.mp4"] "v.aiff" "o.mp4" {})
+        graph (nth cmd (inc (.indexOf cmd "-filter_complex")))]
+    (is (re-find #"concat=n=3:v=1:a=1" graph))
+    (is (re-find #"\[v0\]\[0:a\]\[v1\]\[1:a\]\[v2\]\[2:a\]concat" graph))
+    (testing "the narration is the input after the clips"
+      (is (re-find #"\[3:a\]adelay=" graph)))
+    (testing "no -t when no cut was asked for"
+      (is (neg? (.indexOf cmd "-t"))))))
+
+(deftest narrated-concat-refuses-zero-clips
+  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs :default)
+               (ffmpeg/narrated-concat-cmd [] "v.aiff" "o.mp4" {}))))
+
+(deftest say-cmd-carries-voice-and-rate
+  (is (= ["say" "-v" "Lekha" "-r" "175" "-o" "out.aiff" "नमस्ते"]
+         (ffmpeg/say-cmd {:voice "Lekha" :rate "175" :out "out.aiff" :text "नमस्ते"}))))
