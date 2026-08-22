@@ -392,6 +392,57 @@
    "-filter_complex" "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a]"
    "-map" "0:v" "-map" "[a]" "-c:v" "copy" "-c:a" "aac" out-path])
 
+(defn subtitles-filter-path
+  "Escape a file path for ffmpeg's `subtitles=` filter argument. The filter
+  parser splits on `:` and treats `'` and `\\` specially, and the outer
+  filtergraph parser splits on `,` — so a path like `C:/x,y/ep's.srt` must be
+  escaped twice. Measured against ffmpeg 8: an unescaped macOS path with no
+  special characters works, which is exactly how this bug hides until the
+  first episode id with a colon."
+  [path]
+  (-> (str path)
+      (str/replace "\\" "\\\\")
+      (str/replace ":" "\\:")
+      (str/replace "'" "\\'")
+      (str/replace "," "\\,")))
+
+(def default-subtitle-style
+  "libass force_style for a vertical short: large sans at the lower third,
+  white with a dark outline so it reads over any footage, and a bottom margin
+  that clears a phone's home indicator. `Alignment=2` is bottom-centre."
+  {:font-name "Hiragino Sans" :font-size 28 :primary-colour "&H00FFFFFF"
+   :outline-colour "&H00202020" :outline 2 :shadow 0 :alignment 2 :margin-v 160})
+
+(defn- ass-style-string [{:keys [font-name font-size primary-colour outline-colour
+                                  outline shadow alignment margin-v]}]
+  (str/join "," (remove nil?
+                        [(when font-name (str "FontName=" font-name))
+                         (when font-size (str "FontSize=" font-size))
+                         (when primary-colour (str "PrimaryColour=" primary-colour))
+                         (when outline-colour (str "OutlineColour=" outline-colour))
+                         (when outline (str "Outline=" outline))
+                         (when shadow (str "Shadow=" shadow))
+                         (when alignment (str "Alignment=" alignment))
+                         (when margin-v (str "MarginV=" margin-v))])))
+
+(defn burn-subtitles-cmd
+  "ffmpeg argv that burns an SRT into the picture (libass `subtitles=`),
+  copying the audio stream untouched. The sidecar SRT stays the canonical
+  text; this is the MoneyPrinterTurbo-style presentation of it — a short seen
+  on a phone with sound off still says its line.
+
+  `style` overrides any key of `default-subtitle-style`; pass `{}` for libass
+  defaults. Re-encodes video (the filter has to), so run it once on the
+  finished cut, not per segment."
+  ([video-path srt-path out-path] (burn-subtitles-cmd video-path srt-path out-path nil))
+  ([video-path srt-path out-path style]
+   (let [st (merge default-subtitle-style style)
+         force (ass-style-string st)]
+     ["ffmpeg" "-y" "-i" video-path
+      "-vf" (str "subtitles=" (subtitles-filter-path srt-path)
+                 (when (seq force) (str ":force_style='" force "'")))
+      "-c:v" "libx264" "-pix_fmt" "yuv420p" "-c:a" "copy" out-path])))
+
 (defn concat-list-text [paths]
   (apply str (for [p paths]
                (str "file '" (str/replace p #"'" (constantly "'\\''")) "'\n"))))

@@ -303,3 +303,34 @@
 (deftest say-cmd-carries-voice-and-rate
   (is (= ["say" "-v" "Lekha" "-r" "175" "-o" "out.aiff" "नमस्ते"]
          (ffmpeg/say-cmd {:voice "Lekha" :rate "175" :out "out.aiff" :text "नमस्ते"}))))
+
+
+(deftest burn-subtitles-cmd-escapes-the-path-and-copies-audio
+  (let [cmd (ffmpeg/burn-subtitles-cmd "cut.mp4" "/tmp/ep:1,a'b.srt" "out.mp4")]
+    (testing "argv shape: one -vf, video re-encoded, audio copied, output last"
+      (is (= "ffmpeg" (first cmd)))
+      (is (= "out.mp4" (last cmd)))
+      (is (= ["-c:a" "copy"] (subvec (vec cmd) (- (count cmd) 3) (dec (count cmd)))))
+      (is (some #{"libx264"} cmd)))
+    (testing "the filter path is escaped for both parsers"
+      (let [vf (nth cmd (inc (.indexOf ^java.util.List (vec cmd) "-vf")))]
+        (is (str/starts-with? vf "subtitles=/tmp/ep\\:1\\,a\\'b.srt:force_style='"))
+        (is (str/includes? vf "Alignment=2"))
+        (is (str/includes? vf "MarginV=160"))))))
+
+(deftest burn-subtitles-cmd-style-is-overridable-and-optional
+  (testing "an override replaces one key and keeps the rest"
+    (let [vf (second (drop-while #(not= % "-vf")
+                                 (ffmpeg/burn-subtitles-cmd "c.mp4" "s.srt" "o.mp4" {:font-size 40})))]
+      (is (str/includes? vf "FontSize=40"))
+      (is (str/includes? vf "FontName=Hiragino Sans"))))
+  (testing "nil-ing every key yields a bare subtitles= filter"
+    (let [vf (second (drop-while #(not= % "-vf")
+                                 (ffmpeg/burn-subtitles-cmd
+                                  "c.mp4" "s.srt" "o.mp4"
+                                  (zipmap (keys ffmpeg/default-subtitle-style) (repeat nil)))))]
+      (is (= "subtitles=s.srt" vf)))))
+
+(deftest subtitles-filter-path-is-identity-on-plain-paths
+  (is (= "/Users/x/target/ep-1.srt" (ffmpeg/subtitles-filter-path "/Users/x/target/ep-1.srt")))
+  (is (= "a\\\\b" (ffmpeg/subtitles-filter-path "a\\b"))))
