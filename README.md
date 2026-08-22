@@ -24,7 +24,10 @@ returned command vectors and attach blob storage themselves.
 ;; => ["ffmpeg" "-y" ...]
 ```
 
-Also: `parse-resolution`, `concat-audio-cmd`, `silent-audio-cmd`,
+Also: `burn-subtitles-cmd` (libass `subtitles=` burn-in of a sidecar SRT
+onto the finished cut, path-escaped for both filter parsers, styled for a
+vertical short by default — the MoneyPrinterTurbo-style presentation; the
+SRT stays canonical), `parse-resolution`, `concat-audio-cmd`, `silent-audio-cmd`,
 `video-segment-cmd`, `concat-segments-cmd`, `bgm-mix-cmd`, `concat-list-text`,
 `xfade-transition-cmd` (real `:dissolve`- and `:wipe`-transition
 rendering between exactly two clips, see below), and `xfade-chain-cmd`
