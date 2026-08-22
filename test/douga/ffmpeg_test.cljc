@@ -316,7 +316,8 @@
       (let [vf (nth cmd (inc (.indexOf ^java.util.List (vec cmd) "-vf")))]
         (is (str/starts-with? vf "subtitles=/tmp/ep\\:1\\,a\\'b.srt:force_style='"))
         (is (str/includes? vf "Alignment=2"))
-        (is (str/includes? vf "MarginV=160"))))))
+        (is (str/includes? vf "MarginV=36") "script units: x4.44 on a 1280-high frame")
+        (is (str/includes? vf "FontSize=14"))))))
 
 (deftest burn-subtitles-cmd-style-is-overridable-and-optional
   (testing "an override replaces one key and keeps the rest"

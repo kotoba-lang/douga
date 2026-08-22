@@ -407,11 +407,18 @@
       (str/replace "," "\\,")))
 
 (def default-subtitle-style
-  "libass force_style for a vertical short: large sans at the lower third,
-  white with a dark outline so it reads over any footage, and a bottom margin
-  that clears a phone's home indicator. `Alignment=2` is bottom-centre."
-  {:font-name "Hiragino Sans" :font-size 28 :primary-colour "&H00FFFFFF"
-   :outline-colour "&H00202020" :outline 2 :shadow 0 :alignment 2 :margin-v 160})
+  "libass force_style for a vertical short: sans at the lower third, white
+  with a dark outline so it reads over any footage, and a bottom margin that
+  clears a phone's home indicator. `Alignment=2` is bottom-centre.
+
+  Units are libass SCRIPT units, not pixels. An SRT carries no PlayRes, so
+  libass assumes 384x288 and scales every size by frame-height/288 — on a
+  720x1280 frame that is x4.44. Measured 2026-08-22: FontSize 28 / MarginV
+  160 rendered as a 124 px face sitting in the upper-middle of the frame.
+  FontSize 14 / MarginV 36 is ~62 px at ~160 px from the bottom on 9:16, and
+  scales the same way on 16:9 (x2.5)."
+  {:font-name "Hiragino Sans" :font-size 14 :primary-colour "&H00FFFFFF"
+   :outline-colour "&H00202020" :outline 1 :shadow 0 :alignment 2 :margin-v 36})
 
 (defn- ass-style-string [{:keys [font-name font-size primary-colour outline-colour
                                   outline shadow alignment margin-v]}]
