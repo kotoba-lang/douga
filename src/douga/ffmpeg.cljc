@@ -1,6 +1,6 @@
 (ns douga.ffmpeg
   "Pure video-assembly (dougaka) planning — timeline -> ffmpeg render plan + command builders. No ffmpeg, network, or blob IO here."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def ^:private res-aliases
   {"720p" [1280 720]
@@ -10,7 +10,7 @@
 (defn parse-resolution
   ([res] (parse-resolution res [1280 720]))
   ([res default]
-   (let [s (-> (or res "") str/trim str/lower-case)]
+   (let [s (-> (or res "") str/trim str/lower)]
      (if (str/includes? s "x")
        (try
          (let [[w h] (str/split s #"x" 2)]
@@ -60,7 +60,7 @@
            (let [si (long (or (v line :sceneIndex :scene-index "sceneIndex" "scene_index") 0))
                  li (long (or (v line :lineIndex :line-index "lineIndex" "line_index") 0))
                  vk (v line :voiceBlobKey :voice-blob-key "voiceBlobKey" "voice_blob_key")
-                 spk (-> (or (v line :speaker "speaker") "left") str str/trim str/lower-case)
+                 spk (-> (or (v line :speaker "speaker") "left") str str/trim str/lower)
                  text (-> (or (v line :text "text") "") str str/trim)]
              (if (seq vk)
                (update acc si (fnil conj []) [li vk text spk])
