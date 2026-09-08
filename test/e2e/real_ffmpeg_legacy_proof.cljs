@@ -48,7 +48,7 @@
   assertion(s) printed on failure. Never fabricates a pass: every check
   below is a real measurement of a real file produced by a real ffmpeg
   subprocess."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [douga.ffmpeg :as ffmpeg]
             ["child_process" :refer [execFileSync]]
             ["fs" :as fs]
