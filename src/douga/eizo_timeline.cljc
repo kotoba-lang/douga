@@ -31,7 +31,7 @@
   supported-transition-types) are still unimplemented and a video track
   carrying one is rejected with ex-info rather than silently ignored or
   silently downgraded to a hard cut; wiring those is a further follow-up."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kami.eizo.timeline :as tl]
             [kami.eizo.timeline.timecode :as tc]
             [douga.ffmpeg :as ffmpeg]))
@@ -93,7 +93,7 @@
        (let [si (:douga/scene-index c)
              li (or (:douga/line-index c) 0)
              text (or (:douga/text c) "")
-             speaker (-> (or (:douga/speaker c) "left") str str/trim str/lower-case)]
+             speaker (-> (or (:douga/speaker c) "left") str str/trim str/lower)]
          (update acc si (fnil conj []) [li (:clip/source-id c) text speaker])))
      {}
      (:track/clips audio-track))))
