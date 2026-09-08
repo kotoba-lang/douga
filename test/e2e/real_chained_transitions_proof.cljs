@@ -54,7 +54,7 @@
   assertion(s) printed on failure. Never fabricates a pass: every check
   below is a real measurement of a real file produced by a real ffmpeg
   subprocess."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kami.eizo.timeline :as tl]
             [kami.eizo.timeline.timecode :as tc]
             [douga.eizo-timeline :as det]
