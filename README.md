@@ -146,7 +146,7 @@ from `:dissolve`'s per-pixel alpha blend, not a re-skin of it.
 
 douga is deliberately I/O-free: `douga.ffmpeg` / `douga.eizo-timeline` only
 *return* ffmpeg command vectors, they never shell out. `test/douga/*_test.cljc`
-(run via `clojure -M:test`) only assert the **shape** of those vectors (right
+(run via `kbb -M:test`) only assert the **shape** of those vectors (right
 flags, right ordering) — nothing in this repo's own test suite has ever
 actually handed a generated command vector to a real `ffmpeg` binary and
 checked that it runs and produces correct output.
@@ -190,7 +190,7 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljk
+kbb --backend sci -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
@@ -254,7 +254,7 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_dissolve_proof.cljk
+kbb --backend sci -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_dissolve_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
@@ -337,7 +337,7 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljk
+kbb --backend sci -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
@@ -450,7 +450,7 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_chained_transitions_proof.cljk
+kbb --backend sci -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_chained_transitions_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
@@ -537,7 +537,7 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`. No extra classpath needed —
 this path has no `kami-eizo-timeline` dependency:
 
 ```bash
-nbb -cp src test/e2e/real_ffmpeg_legacy_proof.cljk
+kbb --backend sci -cp src test/e2e/real_ffmpeg_legacy_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
@@ -587,7 +587,7 @@ ISCO-08 `2654` (Film, Stage and Related Directors and Producers) —
 ## Test
 
 ```bash
-clojure -M:test
+kbb -M:test
 ```
 
 ## License
