@@ -151,7 +151,7 @@ flags, right ordering) — nothing in this repo's own test suite has ever
 actually handed a generated command vector to a real `ffmpeg` binary and
 checked that it runs and produces correct output.
 
-`test/e2e/real_ffmpeg_proof.cljs` (nbb) closes that gap. It:
+`test/e2e/real_ffmpeg_proof.cljk` (nbb) closes that gap. It:
 
 1. builds a real [`kami.eizo.timeline`](https://github.com/kotoba-lang/kami-eizo-timeline)
    EDL — 3 scenes (red / lime / blue), 2.0s / 1.5s / 2.5s long at 24fps,
@@ -190,18 +190,18 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljs
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
 failure.
 
-## Real dissolve-transition render proof (`test/e2e/real_dissolve_proof.cljs`)
+## Real dissolve-transition render proof (`test/e2e/real_dissolve_proof.cljk`)
 
 Wave-8's `real_ffmpeg_proof.cljs` above deliberately only covers hard cuts —
 that was `douga.eizo-timeline`'s entire v0 scope, and a `:dissolve`
 video-track transition was rejected with `ex-info` rather than silently
-ignored. `test/e2e/real_dissolve_proof.cljs` is the same real-subprocess
+ignored. `test/e2e/real_dissolve_proof.cljk` is the same real-subprocess
 proof pattern applied to the render path that closes that gap: a real
 `xfade` crossfade, driven through the real `douga.eizo-timeline/render-plan`
 and the real `douga.ffmpeg/xfade-transition-cmd`, not a hand-typed ffmpeg
@@ -254,18 +254,18 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_dissolve_proof.cljs
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_dissolve_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
 failure.
 
-## Real wipe-transition render proof (`test/e2e/real_wipe_proof.cljs`)
+## Real wipe-transition render proof (`test/e2e/real_wipe_proof.cljk`)
 
 `:wipe` is the same shape of gap the dissolve proof above closed for
 `:dissolve`: a `:wipe` video-track transition used to be rejected with
 `ex-info` (still true for any *other* transition type — `:slide`/
-`:wipe-tl`/etc.). `test/e2e/real_wipe_proof.cljs` is the same
+`:wipe-tl`/etc.). `test/e2e/real_wipe_proof.cljk` is the same
 real-subprocess proof pattern, driven through the real
 `douga.eizo-timeline/render-plan` and the real
 `douga.ffmpeg/xfade-transition-cmd` (with `:transition-type :wipe`, which
@@ -337,13 +337,13 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljs
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
 failure.
 
-## Real chained multi-transition render proof (`test/e2e/real_chained_transitions_proof.cljs`)
+## Real chained multi-transition render proof (`test/e2e/real_chained_transitions_proof.cljk`)
 
 The dissolve and wipe proofs above each only ever exercise ONE transition
 between exactly TWO clips — that gap (multi-clip timelines with several
@@ -378,7 +378,7 @@ and chains each stage's filter_complex clause onto the *previous* stage's
 output label (`[vx1]`, `[vx2]`, …), never a raw source label, so the
 accumulated overlap is never silently discarded.
 
-`test/e2e/real_chained_transitions_proof.cljs` is the same real-subprocess
+`test/e2e/real_chained_transitions_proof.cljk` is the same real-subprocess
 proof pattern as the dissolve/wipe proofs, but for a 3-clip, 2-transition
 chain, driven through the real `douga.eizo-timeline/render-plan` (which
 already supported an arbitrary number of `:video-transitions` per track —
@@ -450,7 +450,7 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`, and a local checkout of
 `kotoba-lang/kami-eizo-timeline` whose `src/` is reachable via classpath:
 
 ```bash
-nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_chained_transitions_proof.cljs
+nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_chained_transitions_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
@@ -476,7 +476,7 @@ in timeline order; see its docstring). See `douga.eizo-timeline`'s
 any number per track — no fix was needed there, only in the ffmpeg
 command-building side) as the extension point for further work.
 
-## Real-ffmpeg execution proof for the LEGACY path (`test/e2e/real_ffmpeg_legacy_proof.cljs`)
+## Real-ffmpeg execution proof for the LEGACY path (`test/e2e/real_ffmpeg_legacy_proof.cljk`)
 
 Everything above this section (`real_ffmpeg_proof.cljs`, `real_dissolve_proof.cljs`)
 proves `douga.eizo-timeline`'s `kami.eizo.timeline`-EDL entry point. That path
@@ -484,14 +484,14 @@ is real and well-tested, but it is **not** what runs in production today.
 **The live, deployed `yukkuri` pipeline uses `douga.ffmpeg/build-render-plan`
 directly** — the original, looser "scene/lines/assets" shape (ADR-2607051600)
 — and until this proof, that specific function had only ever been checked at
-the *shape* level (`test/douga/ffmpeg_test.cljc`): never handed to a real
+the *shape* level (`test/douga/ffmpeg_test.cljk`): never handed to a real
 `ffmpeg` binary.
 
-`test/e2e/real_ffmpeg_legacy_proof.cljs` closes that gap, for the actual
+`test/e2e/real_ffmpeg_legacy_proof.cljk` closes that gap, for the actual
 production entry point, with the same rigor as the two proofs above. It:
 
 1. hand-builds a real scene/lines/assets timeline in the exact lenient shape
-   `test/douga/ffmpeg_test.cljc`'s own fixture already assumes (`:scenes`
+   `test/douga/ffmpeg_test.cljk`'s own fixture already assumes (`:scenes`
    with `:index`, `:assets` with `:kind`/`:blobKey`/`:meta {:sceneIndex}`,
    `:lines` with `:sceneIndex`/`:lineIndex`/`:voiceBlobKey`/`:speaker`/
    `:text`) — 3 scenes (red / lime / blue), scene 0 with **two** real voice
@@ -537,7 +537,7 @@ Requires system `ffmpeg` + `ffprobe` on `PATH`. No extra classpath needed —
 this path has no `kami-eizo-timeline` dependency:
 
 ```bash
-nbb -cp src test/e2e/real_ffmpeg_legacy_proof.cljs
+nbb -cp src test/e2e/real_ffmpeg_legacy_proof.cljk
 ```
 
 Exits 0 with a PASS report on success, 1 with the failing checks printed on
