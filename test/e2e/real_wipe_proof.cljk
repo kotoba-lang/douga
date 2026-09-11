@@ -6,7 +6,7 @@
   :dissolve, not a hard cut, not a silently-ignored transition, not a
   broken/corrupted filter.
 
-  This is the :wipe counterpart to test/e2e/real_dissolve_proof.cljs: same
+  This is the :wipe counterpart to test/e2e/real_dissolve_proof.cljk: same
   overall pattern (lavfi-generated solid-color stills, a real
   `kami.eizo.timeline` EDL, the REAL douga code paths, a real ffmpeg child
   process, real ffprobe, real pixel sampling) but a DIFFERENT verification
@@ -49,7 +49,7 @@
   kotoba-lang/kami-eizo-timeline whose src/ is reachable via classpath. Run
   from the douga repo root:
 
-    nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljs
+    nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_wipe_proof.cljk
 
   Exits 0 and prints a PASS report on success, exits 1 with the failing
   assertion(s) printed on failure. Never fabricates a pass: every check
@@ -66,7 +66,7 @@
             ["path" :as path]))
 
 ;; ---------------------------------------------------------------------------
-;; subprocess helpers (same pattern as test/e2e/real_dissolve_proof.cljs)
+;; subprocess helpers (same pattern as test/e2e/real_dissolve_proof.cljk)
 
 (defn- exec!
   [argv]

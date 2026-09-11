@@ -3,7 +3,7 @@
   transitions across three clips in a single video track, as ONE ffmpeg
   invocation -- the multi-transition gap this repo's README explicitly
   flagged as unwired after the single-transition :dissolve/:wipe proofs
-  (test/e2e/real_dissolve_proof.cljs, test/e2e/real_wipe_proof.cljs): both
+  (test/e2e/real_dissolve_proof.cljk, test/e2e/real_wipe_proof.cljk): both
   of those only ever exercise ONE transition between exactly TWO clips.
 
   This proof exercises `douga.ffmpeg/xfade-chain-cmd` (new in this change)
@@ -48,7 +48,7 @@
   kotoba-lang/kami-eizo-timeline whose src/ is reachable via classpath. Run
   from the douga repo root:
 
-    nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_chained_transitions_proof.cljs
+    nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_chained_transitions_proof.cljk
 
   Exits 0 and prints a PASS report on success, exits 1 with the failing
   assertion(s) printed on failure. Never fabricates a pass: every check

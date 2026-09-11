@@ -191,7 +191,7 @@
   blend). :wipe -> `wipeleft` (a moving spatial boundary: clip A stays put
   on the right, clip B is revealed by a hard edge sweeping right-to-left as
   the transition progresses — NOT a blend; verified empirically against the
-  installed ffmpeg's `xfade` filter, see test/e2e/real_wipe_proof.cljs and
+  installed ffmpeg's `xfade` filter, see test/e2e/real_wipe_proof.cljk and
   this repo's README). Only these two have a douga render path today —
   same gate as douga.eizo-timeline's supported-transition-types."
   {:dissolve "fade"
@@ -240,11 +240,11 @@
 
   `transition=fade` (:dissolve) is a genuine linear alpha crossfade, not a
   hard cut or a fade-to-black: verified empirically (see
-  test/e2e/real_dissolve_proof.cljs and this repo's README) — a red->blue
+  test/e2e/real_dissolve_proof.cljk and this repo's README) — a red->blue
   dissolve samples ~50/50 R/B channel contribution at the transition's 50%
   point, and the blend shifts monotonically across the transition window.
   `transition=wipeleft` (:wipe) is a genuine moving spatial boundary, not a
-  blend: verified empirically (see test/e2e/real_wipe_proof.cljs and this
+  blend: verified empirically (see test/e2e/real_wipe_proof.cljk and this
   repo's README) — at a fixed timestamp mid-transition, sampling pixels
   across the frame's width shows clip A's solid color on the (still
   unrevealed) right portion and clip B's solid color on the (already
