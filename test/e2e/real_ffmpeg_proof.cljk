@@ -22,7 +22,7 @@
   kotoba-lang/kami-eizo-timeline (the sha this repo's deps.edn pins) whose
   src/ is reachable via classpath. Run from the douga repo root:
 
-    nbb -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljk
+    kbb --backend sci -cp src:<path-to-kami-eizo-timeline>/src test/e2e/real_ffmpeg_proof.cljk
 
   Exits 0 and prints a PASS report on success, exits 1 with the failing
   assertion(s) printed on failure. Never fabricates a pass: every check
