@@ -21,6 +21,18 @@
 (defn- v [m & ks]
   (some #(get m %) ks))
 
+(defn- format-dsec
+  "Host-stable decimal text for ffmpeg argv values. JVM's (str 2.0) is \"2.0\"
+  but the nbb/cljs engine stringifies integer-valued doubles as \"2\" (measured
+  on kbb --backend sci 2026-09-22: (str 2.0) -> \"2\", (str 4.5) -> \"4.5\").
+  Both are identical doubles and both are valid ffmpeg decimal syntax, but the
+  shape tests pin the string form, so emit JVM-consistent text: append \".0\"
+  when (str d) carries no decimal point. Pure string logic — no JVM interop
+  (String/format does not resolve under nbb), so it is host-stable."
+  [d]
+  (let [s (str d)]
+    (if (some (partial = \.) s) s (str s ".0"))))
+
 (defn- scene-index [scene]
   (long (or (v scene :index :scene_index "index" "scene_index") 0)))
 
@@ -152,7 +164,7 @@
   [i {:keys [at-sec gain]}]
   (let [ms (long (Math/round (* 1000.0 (double (or at-sec 0)))))
         g (double (or gain 1.0))]
-    (str "[" i ":a]adelay=" ms ":all=1,volume=" g "[o" i "]")))
+    (str "[" i ":a]adelay=" ms ":all=1,volume=" (format-dsec g) "[o" i "]")))
 
 (defn audio-overlay-mix-cmd
   "Mix N audio overlays (a looping BGM bed, one-shot SFX cues, or both) onto
@@ -277,7 +289,7 @@
           "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=" fps "[v0];"
           "[1:v]scale=" width ":" height ":force_original_aspect_ratio=decrease,"
           "pad=" width ":" height ":(ow-iw)/2:(oh-ih)/2,setsar=1,fps=" fps "[v1];"
-          "[v0][v1]xfade=transition=" xfade-mode ":duration=" trans-s ":offset=" offset-s "[v]")
+          "[v0][v1]xfade=transition=" xfade-mode ":duration=" (format-dsec trans-s) ":offset=" (format-dsec offset-s) "[v]")
      "-map" "[v]" "-r" (str fps) "-c:v" "libx264" "-pix_fmt" "yuv420p" out-path]))
 
 (defn xfade-chain-cmd
@@ -379,7 +391,7 @@
                    next-dur-s (- (+ acc-dur-s (nth durs-s k)) t-s)]
                {:acc-dur-s next-dur-s
                 :filter-str (str filter-str "[" in0 "][" in1 "]xfade=transition=" mode
-                                  ":duration=" t-s ":offset=" offset-s "[" out-label "]"
+                                  ":duration=" (format-dsec t-s) ":offset=" (format-dsec offset-s) "[" out-label "]"
                                   (when-not (= k last-stage) ";"))}))
            {:acc-dur-s (first durs-s) :filter-str ""}
            (range 1 n))]
