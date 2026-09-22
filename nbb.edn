@@ -1,0 +1,17 @@
+;; kbb reads this file. It does NOT read deps.edn, and the
+;; .cljk here are run as bare `kbb -M:test`, so a coordinate declared only
+;; there is invisible to the engine.
+;;
+;; Unblock recipe (runbook: kotoba-runner-loading.md): copy the coords from
+;; deps.edn HERE — every sha below is COPIED from deps.edn, not chosen.
+;; kami-eizo-timeline uses the :deps/root "." shape from deps.edn —
+;; unproven with the nbb/kbb engine as of 2026-09-21.
+;; 2026-09-21 conformance cron attempt (first).
+{:paths ["src" "."]
+ :deps {
+        io.github.kotoba-lang/text
+        {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+        io.github.kotoba-lang/kami-eizo-timeline
+        {:git/url "https://github.com/kotoba-lang/kami-eizo-timeline"
+         :git/sha "0cf14835d57df0b094dea92a507b39700eb295ec"
+         :deps/root "."}}}
