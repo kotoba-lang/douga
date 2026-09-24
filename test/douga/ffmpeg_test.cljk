@@ -1,5 +1,5 @@
 (ns douga.ffmpeg-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.coll :as kcoll] [kotoba.test :refer [deftest is testing]]
             [kotoba.lang.text :as str]
             [douga.ffmpeg :as ffmpeg]))
 
@@ -222,7 +222,7 @@
                "v.mp4" [{:file "bgm.wav" :loop? true :gain 0.18}
                         {:file "sfx.wav" :at-sec 7.5}]
                "out.mp4")
-          idx (fn [x] (.indexOf ^java.util.List cmd x))]
+          idx (fn [x] (kcoll/index-of cmd x))]
       (is (= 1 (count (filter #{"-stream_loop"} cmd))))
       (is (< (idx "-stream_loop") (idx "bgm.wav")))
       (is (< (idx "bgm.wav") (idx "sfx.wav")) "input order follows overlay order")))
@@ -240,8 +240,8 @@
   (testing "video is stream-copied; only audio is re-encoded"
     (let [cmd (ffmpeg/audio-overlay-mix-cmd "v.mp4" [{:file "b.wav"}] "out.mp4")]
       (is (some #{"-c:v"} cmd))
-      (is (= "copy" (nth cmd (inc (.indexOf ^java.util.List cmd "-c:v")))))
-      (is (= "aac" (nth cmd (inc (.indexOf ^java.util.List cmd "-c:a"))))))))
+      (is (= "copy" (nth cmd (inc (kcoll/index-of cmd "-c:v")))))
+      (is (= "aac" (nth cmd (inc (kcoll/index-of cmd "-c:a"))))))))
 
 (deftest video-segment-cmd-audio-and-padding
   (testing "no audio-path -> silent stream, as before"
@@ -313,7 +313,7 @@
       (is (= ["-c:a" "copy"] (subvec (vec cmd) (- (count cmd) 3) (dec (count cmd)))))
       (is (some #{"libx264"} cmd)))
     (testing "the filter path is escaped for both parsers"
-      (let [vf (nth cmd (inc (.indexOf ^java.util.List (vec cmd) "-vf")))]
+      (let [vf (nth cmd (inc (kcoll/index-of (vec cmd) "-vf")))]
         (is (str/starts-with? vf "subtitles=/tmp/ep\\:1\\,a\\'b.srt:force_style='"))
         (is (str/includes? vf "Alignment=2"))
         (is (str/includes? vf "MarginV=36") "script units: x4.44 on a 1280-high frame")
