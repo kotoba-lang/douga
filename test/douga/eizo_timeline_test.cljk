@@ -72,7 +72,7 @@
                               :duration 12})
           video-track (assoc video-track :track/transitions [tr])
           timeline (assoc-in timeline [:timeline/tracks 0] video-track)]
-      (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+      (is (thrown? js/Error
                    (det/render-plan timeline))))))
 
 (defn- video-track-with-transition

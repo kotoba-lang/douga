@@ -92,7 +92,7 @@
       (is (some #(= "[v]" %) cmd))
       (is (some #(str/includes? (str %) "scale=320:240") cmd))))
   (testing "throws when the transition duration exceeds clip A's own duration"
-    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+    (is (thrown? js/Error
                  (ffmpeg/xfade-transition-cmd "a.png" "b.png" "out.mp4"
                                               {:width 320 :height 240 :fps 24
                                                :from-duration-frames 24
@@ -109,7 +109,7 @@
       (is (str/includes? filter-str "xfade=transition=wipeleft"))
       (is (not (str/includes? filter-str "transition=fade")))))
   (testing "throws for an unknown :transition-type instead of silently falling back to fade"
-    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+    (is (thrown? js/Error
                  (ffmpeg/xfade-transition-cmd "a.png" "b.png" "out.mp4"
                                               {:width 320 :height 240 :fps 24
                                                :from-duration-frames 96
@@ -161,7 +161,7 @@
           filter-str (str (second (drop-while #(not= "-filter_complex" %) cmd)))]
       (is (re-find #"\[v0\]\[v1\]xfade=transition=fade:duration=2.0:offset=2.0\[v\]" filter-str))))
   (testing "throws when segment/transition counts don't line up (need N-1 transitions for N segments)"
-    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+    (is (thrown? js/Error
                  (ffmpeg/xfade-chain-cmd
                   [{:frame-blob-key "a.png" :duration-frames 96}
                    {:frame-blob-key "b.png" :duration-frames 96}
@@ -169,7 +169,7 @@
                   [{:duration-frames 48 :transition-type :dissolve}]
                   "out.mp4" {:width 320 :height 240 :fps 24}))))
   (testing "throws when a later transition's duration exceeds the chain's accumulated duration so far"
-    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+    (is (thrown? js/Error
                  (ffmpeg/xfade-chain-cmd
                   [{:frame-blob-key "a.png" :duration-frames 24}    ;; 1.0s
                    {:frame-blob-key "b.png" :duration-frames 24}    ;; 1.0s
@@ -178,7 +178,7 @@
                    {:duration-frames 48 :transition-type :wipe}]    ;; 2.0s > D_1 = 1.5s -- should throw
                   "out.mp4" {:width 320 :height 240 :fps 24}))))
   (testing "throws for an unknown transition-type in any stage before building any argv"
-    (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+    (is (thrown? js/Error
                  (ffmpeg/xfade-chain-cmd
                   [{:frame-blob-key "a.png" :duration-frames 96}
                    {:frame-blob-key "b.png" :duration-frames 96}
@@ -297,7 +297,7 @@
       (is (neg? (.indexOf cmd "-t"))))))
 
 (deftest narrated-concat-refuses-zero-clips
-  (is (thrown? #?(:clj clojure.lang.ExceptionInfo :cljs :default)
+  (is (thrown? :default
                (ffmpeg/narrated-concat-cmd [] "v.aiff" "o.mp4" {}))))
 
 (deftest say-cmd-carries-voice-and-rate
